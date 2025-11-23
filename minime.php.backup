@@ -1,0 +1,1975 @@
+<?php
+/*
+Plugin Name: minime
+Description: REST API for minime frontend + external admin panel. No ACF required. Stores everything in core options.
+Version: 3.0.0
+Author: Ayop
+Text Domain: minime
+*/
+
+if ( ! defined( 'ABSPATH' ) ) {
+    exit;
+}
+
+if ( ! defined( 'MINIME_PLUGIN_VERSION' ) ) {
+    define( 'MINIME_PLUGIN_VERSION', '3.0.0' );
+}
+
+if ( ! defined( 'MINIME_FRONT_SLUG' ) ) {
+    define( 'MINIME_FRONT_SLUG', 'minime' );
+}
+
+if ( ! defined( 'MINIME_ADMIN_SLUG' ) ) {
+    define( 'MINIME_ADMIN_SLUG', 'admin' );
+}
+
+/**
+ * Load plugin text domain for translations.
+ */
+function minime_load_textdomain() {
+    load_plugin_textdomain( 'minime', false, dirname( plugin_basename( __FILE__ ) ) . '/languages' );
+}
+add_action( 'plugins_loaded', 'minime_load_textdomain' );
+
+/**
+ * Helper to get plugin asset URL.
+ */
+function minime_asset_url( $path = '' ) {
+    return plugins_url( ltrim( $path, '/' ), __FILE__ );
+}
+
+/**
+ * Override page template for minime pages to use blank template.
+ */
+add_filter( 'template_include', 'minime_override_page_template' );
+
+function minime_override_page_template( $template ) {
+    $front_page_id = (int) get_option( 'minime_front_page_id', 0 );
+    $admin_page_id = (int) get_option( 'minime_admin_page_id', 0 );
+    
+    if ( is_page( $front_page_id ) || is_page( $admin_page_id ) ) {
+        $plugin_template = plugin_dir_path( __FILE__ ) . 'templates/minime-blank.php';
+        if ( file_exists( $plugin_template ) ) {
+            return $plugin_template;
+        }
+    }
+
+    return $template;
+}
+
+/**
+ * Disable admin toolbar on minime pages.
+ */
+add_action( 'template_redirect', 'minime_disable_admin_bar' );
+
+function minime_disable_admin_bar() {
+    $front_page_id = (int) get_option( 'minime_front_page_id', 0 );
+    $admin_page_id = (int) get_option( 'minime_admin_page_id', 0 );
+    
+    if ( is_page( $front_page_id ) || is_page( $admin_page_id ) ) {
+        show_admin_bar( false );
+    }
+}
+
+/**
+ * Strip theme styles on minime pages to prevent conflicts.
+ */
+add_action( 'wp_enqueue_scripts', 'minime_strip_theme_styles_on_minime_pages', 100 );
+
+function minime_strip_theme_styles_on_minime_pages() {
+    if ( ! ( is_page( MINIME_FRONT_SLUG ) || is_page( MINIME_ADMIN_SLUG ) ) ) {
+        return;
+    }
+
+    global $wp_styles;
+
+    if ( ! ( $wp_styles instanceof WP_Styles ) ) {
+        return;
+    }
+
+    // اسماء الستيلات بتاعة البلجن عشان منمسحهاش
+    $allowed = array(
+        'minime-style',
+        'minime-admin-style',
+        'dashicons', // لو محتاجها
+    );
+
+    foreach ( $wp_styles->queue as $handle ) {
+        if ( ! in_array( $handle, $allowed, true ) ) {
+            wp_dequeue_style( $handle );
+            wp_deregister_style( $handle );
+        }
+    }
+}
+
+/**
+ * Create required pages on plugin activation and set front page.
+ */
+function minime_activate_plugin() {
+    // 1) Create / ensure public card page
+    $front_page_id = minime_ensure_page(
+        'Minime Page',
+        MINIME_FRONT_SLUG,
+        '[minime_link_in_bio]'
+    );
+
+    // 2) Create / ensure admin settings SPA page
+    $admin_page_id = minime_ensure_page(
+        'Minime Admin',
+        MINIME_ADMIN_SLUG,
+        '[minime_admin_panel]'
+    );
+
+    // Store IDs for later use if needed
+    update_option( 'minime_front_page_id', (int) $front_page_id );
+    update_option( 'minime_admin_page_id', (int) $admin_page_id );
+
+    // 3) Set the card page as the front page (Home)
+    if ( $front_page_id && get_option( 'page_on_front' ) != $front_page_id ) {
+        update_option( 'show_on_front', 'page' );
+        update_option( 'page_on_front', (int) $front_page_id );
+    }
+}
+register_activation_hook( __FILE__, 'minime_activate_plugin' );
+
+/**
+ * Helper to create a page if it does not exist.
+ * Forces exact slug to prevent duplicates.
+ */
+function minime_ensure_page( $title, $slug, $shortcode_content ) {
+    // Force exact slug (sanitize it once)
+    $slug = sanitize_title( $slug );
+    
+    // Check if page with this exact slug already exists
+    $existing = get_page_by_path( $slug, OBJECT, 'page' );
+
+    if ( $existing && $existing->post_status === 'publish' ) {
+        // Page exists - update content if needed
+        $needs_update = false;
+        $updated = array( 'ID' => $existing->ID );
+
+        if ( strpos( (string) $existing->post_content, $shortcode_content ) === false ) {
+            $updated['post_content'] = $shortcode_content;
+            $needs_update = true;
+        }
+
+        if ( $existing->post_title !== $title ) {
+            $updated['post_title'] = $title;
+            $needs_update = true;
+        }
+
+        if ( $needs_update ) {
+            wp_update_post( $updated );
+        }
+
+        return $existing->ID;
+    }
+
+    // Check if there's a trashed/draft page with same slug and restore it
+    $args = array(
+        'name'        => $slug,
+        'post_type'   => 'page',
+        'post_status' => array( 'draft', 'trash', 'pending' ),
+        'numberposts' => 1,
+    );
+    $found_pages = get_posts( $args );
+
+    if ( ! empty( $found_pages ) ) {
+        $page = $found_pages[0];
+        wp_update_post( array(
+            'ID'           => $page->ID,
+            'post_status'  => 'publish',
+            'post_content' => $shortcode_content,
+            'post_title'   => $title,
+            'post_name'    => $slug,
+        ) );
+        return $page->ID;
+    }
+
+    // Create new page with exact slug
+    $page_id = wp_insert_post(
+        array(
+            'post_title'   => $title,
+            'post_name'    => $slug,
+            'post_status'  => 'publish',
+            'post_type'    => 'page',
+            'post_content' => $shortcode_content,
+        )
+    );
+
+    return $page_id;
+}
+
+/*
+ * Polyfills for older PHP versions
+ */
+if ( ! function_exists( 'str_contains' ) ) {
+    function str_contains( $haystack, $needle ) {
+        return $needle !== '' && mb_strpos( $haystack, $needle ) !== false;
+    }
+}
+
+if ( ! function_exists( 'str_starts_with' ) ) {
+    function str_starts_with( $haystack, $needle ) {
+        return mb_substr( $haystack, 0, mb_strlen( $needle ) ) === $needle;
+    }
+}
+
+/**
+ * Option name to store all custom minime settings.
+ */
+define( 'MINIME_OPTION_KEY', 'minime_settings' );
+
+/**
+ * Register minime shortcodes.
+ */
+function minime_register_shortcodes() {
+    add_shortcode( 'minime_link_in_bio', 'minime_render_card_shortcode' );
+    add_shortcode( 'minime_admin_panel', 'minime_render_admin_shortcode' );
+}
+add_action( 'init', 'minime_register_shortcodes' );
+
+/**
+ * Customize email From address to use minime branding.
+ */
+add_filter( 'wp_mail_from', 'minime_mail_from' );
+
+function minime_mail_from( $original_email ) {
+    // Get site domain from home URL
+    $site_url = home_url();
+    $parsed = parse_url( $site_url );
+    
+    if ( isset( $parsed['host'] ) && ! empty( $parsed['host'] ) ) {
+        $domain = $parsed['host'];
+        // Remove www. if present
+        $domain = preg_replace( '/^www\./i', '', $domain );
+        return 'no-reply@' . $domain;
+    }
+    
+    // Fallback to admin email if parsing fails
+    $admin_email = get_option( 'admin_email' );
+    return $admin_email ? $admin_email : $original_email;
+}
+
+/**
+ * Customize email From name to use minime branding.
+ */
+add_filter( 'wp_mail_from_name', 'minime_mail_from_name' );
+
+function minime_mail_from_name( $original_name ) {
+    return 'minime';
+}
+
+/**
+ * Get the minime admin page URL.
+ */
+function minime_get_admin_url() {
+    return home_url( '/admin' );
+}
+
+/**
+ * Customize password reset email subject.
+ */
+add_filter( 'retrieve_password_title', 'minime_reset_email_subject' );
+
+function minime_reset_email_subject( $title ) {
+    return __( 'Reset your minime login password', 'minime' );
+}
+
+/**
+ * Customize password reset email message with HTML template.
+ */
+add_filter( 'retrieve_password_message', 'minime_reset_email_message', 10, 4 );
+
+function minime_reset_email_message( $message, $key, $user_login, $user_data ) {
+    // Enable HTML email temporarily
+    add_filter( 'wp_mail_content_type', 'minime_mail_content_type' );
+    
+    // Build reset URL pointing to custom admin page
+    $reset_url = add_query_arg(
+        array(
+            'minime_reset' => '1',
+            'key'          => rawurlencode( $key ),
+            'login'        => rawurlencode( $user_login ),
+        ),
+        minime_get_admin_url()
+    );
+    
+    // Get user display name or fallback to login
+    $display_name = ! empty( $user_data->display_name ) ? $user_data->display_name : $user_login;
+    
+    // HTML email template
+    $html = '<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Reset Your Password</title>
+</head>
+<body style="margin: 0; padding: 0; font-family: system-ui, -apple-system, BlinkMacSystemFont, \'Segoe UI\', sans-serif; background-color: #f3f4f6; color: #111827;">
+    <table width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color: #f3f4f6; padding: 40px 20px;">
+        <tr>
+            <td align="center">
+                <table width="600" cellpadding="0" cellspacing="0" border="0" style="max-width: 600px; background-color: #ffffff; border-radius: 24px; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08); overflow: hidden;">
+                    
+                    <!-- Header -->
+                    <tr>
+                        <td style="padding: 48px 40px 32px; text-align: center; background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);">
+                            <h1 style="margin: 0; font-size: 32px; font-weight: 700; color: #111827; letter-spacing: 0.08em; text-transform: uppercase;">minime</h1>
+                        </td>
+                    </tr>
+                    
+                    <!-- Content -->
+                    <tr>
+                        <td style="padding: 40px 40px 32px;">
+                            <h2 style="margin: 0 0 16px; font-size: 24px; font-weight: 600; color: #111827;">' . esc_html( __( 'Reset Your Password', 'minime' ) ) . '</h2>
+                            
+                            <p style="margin: 0 0 24px; font-size: 16px; line-height: 1.6; color: #4b5563;">
+                                ' . sprintf( __( 'Hi %s,', 'minime' ), '<strong>' . esc_html( $display_name ) . '</strong>' ) . '
+                            </p>
+                            
+                            <p style="margin: 0 0 32px; font-size: 16px; line-height: 1.6; color: #4b5563;">
+                                ' . esc_html( __( 'Someone requested a password reset for your minime account. If this was you, click the button below to create a new password:', 'minime' ) ) . '
+                            </p>
+                            
+                            <!-- CTA Button -->
+                            <table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-bottom: 32px;">
+                                <tr>
+                                    <td align="center">
+                                        <a href="' . esc_url( $reset_url ) . '" style="display: inline-block; padding: 16px 40px; font-size: 16px; font-weight: 600; color: #ffffff; background-color: #111827; text-decoration: none; border-radius: 999px; letter-spacing: 0.05em; text-transform: uppercase;">' . esc_html( __( 'Reset Your Password', 'minime' ) ) . '</a>
+                                    </td>
+                                </tr>
+                            </table>
+                            
+                            <p style="margin: 0 0 24px; font-size: 14px; line-height: 1.6; color: #6b7280;">
+                                ' . esc_html( __( 'Or copy and paste this link into your browser:', 'minime' ) ) . '
+                            </p>
+                            
+                            <p style="margin: 0 0 32px; padding: 16px; font-size: 13px; line-height: 1.5; color: #374151; background-color: #f9fafb; border-radius: 8px; word-break: break-all; font-family: monospace;">
+                                ' . esc_url( $reset_url ) . '
+                            </p>
+                            
+                            <p style="margin: 0; font-size: 14px; line-height: 1.6; color: #6b7280;">
+                                ' . esc_html( __( 'If you didn\'t request a password reset, you can safely ignore this email. Your password will remain unchanged.', 'minime' ) ) . '
+                            </p>
+                        </td>
+                    </tr>
+                    
+                    <!-- Footer -->
+                    <tr>
+                        <td style="padding: 32px 40px; text-align: center; background-color: #f9fafb; border-top: 1px solid #e5e7eb;">
+                            <p style="margin: 0; font-size: 12px; color: #9ca3af; text-transform: uppercase; letter-spacing: 0.08em;">
+                                ' . esc_html( __( 'Powered by minime', 'minime' ) ) . '
+                            </p>
+                        </td>
+                    </tr>
+                    
+                </table>
+            </td>
+        </tr>
+    </table>
+</body>
+</html>';
+
+    // Remove HTML content type filter after this email
+    // Hook into 'phpmailer_init' to remove the filter after the email is sent
+    add_action( 'phpmailer_init', 'minime_remove_mail_content_type' );
+    
+    return $html;
+}
+
+/**
+ * Set email content type to HTML for password reset emails.
+ */
+function minime_mail_content_type( $content_type ) {
+    return 'text/html; charset=UTF-8';
+}
+
+/**
+ * Remove HTML content type filter after email is sent.
+ */
+function minime_remove_mail_content_type() {
+    remove_filter( 'wp_mail_content_type', 'minime_mail_content_type' );
+    remove_action( 'phpmailer_init', 'minime_remove_mail_content_type' );
+}
+
+/**
+ * Load settings array from options with sane defaults.
+ */
+function minime_get_settings() {
+    $settings = get_option( MINIME_OPTION_KEY, array() );
+
+    if ( ! is_array( $settings ) ) {
+        $settings = array();
+    }
+
+    // Defaults
+    if ( ! isset( $settings['bio'] ) ) {
+        $settings['bio'] = '';
+    }
+
+    if ( ! isset( $settings['background'] ) || ! is_array( $settings['background'] ) ) {
+        $settings['background'] = array();
+    }
+    $bg = $settings['background'];
+
+    if ( ! isset( $bg['type'] ) ) {
+        $bg['type'] = 'image'; // image | color | gradient | custom
+    }
+    if ( ! isset( $bg['image_id'] ) ) {
+        $bg['image_id'] = 0;
+    }
+    if ( ! isset( $bg['color'] ) ) {
+        $bg['color'] = '#000000';
+    }
+    if ( ! isset( $bg['gradient'] ) || ! is_array( $bg['gradient'] ) ) {
+        $bg['gradient'] = array(
+            'colors' => array(),
+            'angle'  => 180,
+        );
+    } else {
+        if ( ! isset( $bg['gradient']['colors'] ) || ! is_array( $bg['gradient']['colors'] ) ) {
+            $bg['gradient']['colors'] = array();
+        }
+        if ( ! isset( $bg['gradient']['angle'] ) ) {
+            $bg['gradient']['angle'] = 180;
+        }
+    }
+    if ( ! isset( $bg['custom_code'] ) ) {
+        $bg['custom_code'] = '';
+    }
+
+    $settings['background'] = $bg;
+
+    if ( ! isset( $settings['socials'] ) || ! is_array( $settings['socials'] ) ) {
+        $settings['socials'] = array();
+    }
+
+    if ( ! isset( $settings['buttons'] ) || ! is_array( $settings['buttons'] ) ) {
+        $settings['buttons'] = array();
+    }
+
+    // Card Background - separate from page background
+    if ( ! isset( $settings['card_background'] ) || ! is_array( $settings['card_background'] ) ) {
+        $settings['card_background'] = array();
+    }
+    $card_bg = $settings['card_background'];
+
+    if ( ! isset( $card_bg['type'] ) ) {
+        $card_bg['type'] = 'solid'; // solid | gradient
+    }
+    if ( ! isset( $card_bg['color'] ) ) {
+        $card_bg['color'] = '#ffffff';
+    }
+    if ( ! isset( $card_bg['gradient'] ) || ! is_array( $card_bg['gradient'] ) ) {
+        $card_bg['gradient'] = array(
+            'colors' => array( '#ffffff', '#eeeeee' ),
+            'angle'  => 135,
+        );
+    } else {
+        if ( ! isset( $card_bg['gradient']['colors'] ) || ! is_array( $card_bg['gradient']['colors'] ) ) {
+            $card_bg['gradient']['colors'] = array( '#ffffff', '#eeeeee' );
+        }
+        if ( ! isset( $card_bg['gradient']['angle'] ) ) {
+            $card_bg['gradient']['angle'] = 135;
+        }
+    }
+
+    $settings['card_background'] = $card_bg;
+
+    // Homepage control
+    if ( ! isset( $settings['keep_homepage'] ) ) {
+        $settings['keep_homepage'] = false;
+    }
+
+    if ( ! isset( $settings['branding_footer_text'] ) ) {
+        $settings['branding_footer_text'] = 'Powered by · Ayop · Headless WP · REST API';
+    }
+
+    return $settings;
+}
+
+/**
+ * Save settings array back to options.
+ */
+function minime_update_settings( array $settings ) {
+    update_option( MINIME_OPTION_KEY, $settings );
+}
+
+/**
+ * Conditionally set minime page as the WordPress front page.
+ * Respects the 'keep_homepage' setting.
+ */
+function minime_maybe_set_front_page( $page_id, $settings ) {
+    if ( empty( $page_id ) || ! get_post( $page_id ) ) {
+        return;
+    }
+    
+    // If user chose to keep current homepage, do nothing
+    if ( ! empty( $settings['keep_homepage'] ) ) {
+        return;
+    }
+    
+    // Otherwise, set minime page as the static front page
+    update_option( 'show_on_front', 'page' );
+    update_option( 'page_on_front', (int) $page_id );
+}
+
+/**
+ * Normalize URLs for socials / buttons based on type/value.
+ */
+function minime_normalize_contact_url( $type, $value ) {
+    $type  = strtolower( trim( (string) $type ) );
+    $value = trim( (string) $value );
+
+    if ( $value === '' ) {
+        return '';
+    }
+
+    // Already a full URL with scheme
+    if ( preg_match( '~^https?://~i', $value ) ) {
+        return esc_url_raw( $value );
+    }
+
+    // Basic patterns
+    switch ( $type ) {
+        case 'instagram':
+            return 'https://instagram.com/' . ltrim( $value, '@/ ' );
+        case 'facebook':
+            return 'https://facebook.com/' . ltrim( $value, '@/ ' );
+        case 'linkedin':
+            return 'https://linkedin.com/in/' . ltrim( $value, '@/ ' );
+        case 'youtube':
+            return 'https://youtube.com/' . ltrim( $value, '@/ ' );
+        case 'x':
+        case 'twitter':
+            return 'https://x.com/' . ltrim( $value, '@/ ' );
+        case 'tiktok':
+            return 'https://www.tiktok.com/@' . ltrim( $value, '@/ ' );
+        case 'snapchat':
+            return 'https://www.snapchat.com/add/' . ltrim( $value, '@/ ' );
+        case 'telegram':
+            return 'https://t.me/' . ltrim( $value, '@/ ' );
+        case 'github':
+            return 'https://github.com/' . ltrim( $value, '@/ ' );
+        case 'dribbble':
+            return 'https://dribbble.com/' . ltrim( $value, '@/ ' );
+        case 'behance':
+            return 'https://www.behance.net/' . ltrim( $value, '@/ ' );
+        case 'whatsapp':
+            $digits = preg_replace( '~\D+~', '', $value );
+            if ( strlen( $digits ) >= 8 ) {
+                return 'https://wa.me/' . $digits;
+            }
+            return esc_url_raw( $value );
+        case 'email':
+        case 'mail':
+            if ( str_contains( $value, '@' ) && ! str_starts_with( $value, 'mailto:' ) ) {
+                return 'mailto:' . $value;
+            }
+            return esc_url_raw( $value );
+        case 'phone':
+        case 'call':
+            $digits = preg_replace( '~\D+~', '', $value );
+            if ( $digits !== '' ) {
+                return 'tel:' . $digits;
+            }
+            return esc_url_raw( $value );
+    }
+
+    // Generic normalization:
+    // "example.com" → "https://example.com"
+    if ( preg_match( '~^[\w.-]+\.[a-z]{2,}(/.*)?$~i', $value ) ) {
+        return 'https://' . $value;
+    }
+
+    return esc_url_raw( $value );
+}
+
+/* ------------------------------------------------------------------------- */
+/*  REST: GET /minime/v1/data – public frontend/admin data
+/* ------------------------------------------------------------------------- */
+
+add_action( 'rest_api_init', function () {
+    register_rest_route(
+        'minime/v1',
+        'data',
+        array(
+            'methods'             => 'GET',
+            'callback'            => 'minime_get_data',
+            'permission_callback' => '__return_true',
+        )
+    );
+} );
+
+function minime_get_data( WP_REST_Request $request ) {
+    $settings = minime_get_settings();
+
+    // Core site meta: Name & Subtitle
+    $site_title   = get_bloginfo( 'name' );
+    $site_tagline = get_bloginfo( 'description' );
+
+    // Site icon (WordPress core) – avatar for card + favicon
+    $site_icon_url = get_site_icon_url();
+    $site_icon_id  = (int) get_option( 'site_icon', 0 );
+
+    // Background: resolve URLs for image if we have IDs
+    $bg          = $settings['background'];
+    $bg_type     = isset( $bg['type'] ) ? $bg['type'] : 'image';
+    $bg_image_id = isset( $bg['image_id'] ) ? (int) $bg['image_id'] : 0;
+
+    $bg_image_url = $bg_image_id ? wp_get_attachment_url( $bg_image_id ) : '';
+
+    $bg_color    = isset( $bg['color'] ) ? $bg['color'] : '#000000';
+    $bg_gradient = isset( $bg['gradient'] ) && is_array( $bg['gradient'] ) ? $bg['gradient'] : array(
+        'colors' => array(),
+        'angle'  => 180,
+    );
+    
+    // Re-encode custom_code to Base64 for frontend (stored as decoded HTML internally)
+    $bg_custom_raw = isset( $bg['custom_code'] ) ? $bg['custom_code'] : '';
+    $bg_custom     = base64_encode( $bg_custom_raw );
+
+    // Socials – build normalized URLs
+    $socials_raw = $settings['socials'];
+    $socials     = array();
+
+    if ( is_array( $socials_raw ) ) {
+        foreach ( $socials_raw as $row ) {
+            $type  = isset( $row['type'] ) ? $row['type'] : '';
+            $value = isset( $row['value'] ) ? $row['value'] : '';
+
+            if ( $type === '' && $value === '' ) {
+                continue;
+            }
+
+            $url = minime_normalize_contact_url( $type, $value );
+            if ( $url === '' ) {
+                continue;
+            }
+
+            $socials[] = array(
+                'type'   => $type,
+                'value'  => $value,
+                'url'    => $url,
+                'icon'   => $type, // frontend decides which icon to render
+            );
+        }
+    }
+
+    // Buttons – also normalized to URLs
+    $buttons_raw = $settings['buttons'];
+    $buttons     = array();
+
+    if ( is_array( $buttons_raw ) ) {
+        foreach ( $buttons_raw as $row ) {
+            $label = isset( $row['label'] ) ? $row['label'] : '';
+            $value = isset( $row['value'] ) ? $row['value'] : '';
+
+            if ( $label === '' && $value === '' ) {
+                continue;
+            }
+
+            // Use same normalization
+            $url = minime_normalize_contact_url( 'button', $value );
+            if ( $url === '' ) {
+                $url = $value; // fallback
+            }
+
+            $buttons[] = array(
+                'label' => $label,
+                'value' => $value,
+                'url'   => $url,
+            );
+        }
+    }
+
+    // Public URL for "View my minime" button
+    $minime_page_id = (int) get_option( 'minime_front_page_id', 0 );
+    $public_url = '';
+
+    if ( $minime_page_id && get_post_status( $minime_page_id ) ) {
+        $public_url = get_permalink( $minime_page_id );
+    } else {
+        $public_url = home_url( '/' );
+    }
+
+    // Card Background - separate from page background
+    $card_bg = isset( $settings['card_background'] ) ? $settings['card_background'] : array();
+    $card_bg_type = isset( $card_bg['type'] ) ? $card_bg['type'] : 'solid';
+    $card_bg_color = isset( $card_bg['color'] ) ? $card_bg['color'] : '#ffffff';
+    $card_bg_gradient = isset( $card_bg['gradient'] ) && is_array( $card_bg['gradient'] ) ? $card_bg['gradient'] : array(
+        'colors' => array( '#ffffff', '#eeeeee' ),
+        'angle'  => 135,
+    );
+
+    return array(
+        // Identity – Name/Subtitle/Bio
+        'site_title'   => $site_title,
+        'site_tagline' => $site_tagline,
+        'name'         => $site_title,   // alias for frontend card
+        'subtitle'     => $site_tagline, // alias for frontend card
+        'bio'          => $settings['bio'],
+
+        // Avatar / icon
+        'site_icon_id'  => $site_icon_id,
+        'site_icon_url' => $site_icon_url,
+
+        // Background
+        'background' => array(
+            'type'         => $bg_type,
+            'image_id'     => $bg_image_id,
+            'image_url'    => $bg_image_url,
+            'color'        => $bg_color,
+            'gradient'     => array(
+                'colors' => isset( $bg_gradient['colors'] ) ? $bg_gradient['colors'] : array(),
+                'angle'  => isset( $bg_gradient['angle'] ) ? (int) $bg_gradient['angle'] : 180,
+            ),
+            'custom_code'  => $bg_custom,
+        ),
+
+        // Card Background - separate from page background
+        'card_background' => array(
+            'type'     => $card_bg_type,
+            'color'    => $card_bg_color,
+            'gradient' => array(
+                'colors' => isset( $card_bg_gradient['colors'] ) ? $card_bg_gradient['colors'] : array( '#ffffff', '#eeeeee' ),
+                'angle'  => isset( $card_bg_gradient['angle'] ) ? (int) $card_bg_gradient['angle'] : 135,
+            ),
+        ),
+
+        // Social links & buttons
+        'socials' => $socials,
+        'buttons' => $buttons,
+        
+        // Public page URL
+        'public_url' => $public_url,
+        'keep_homepage' => isset( $settings['keep_homepage'] ) ? $settings['keep_homepage'] : false,
+        'branding_footer_text' => isset( $settings['branding_footer_text'] ) ? $settings['branding_footer_text'] : 'Powered by · Ayop · Headless WP · REST API',
+    );
+}
+
+/* ------------------------------------------------------------------------- */
+/*  LOGIN – POST /minime/v1/login → WP users + token
+/* ------------------------------------------------------------------------- */
+
+add_action( 'rest_api_init', function () {
+    register_rest_route(
+        'minime/v1',
+        'login',
+        array(
+            'methods'             => 'POST',
+            'callback'            => 'minime_login',
+            'permission_callback' => '__return_true',
+        )
+    );
+    
+    register_rest_route(
+        'minime/v1',
+        'request-password-reset',
+        array(
+            'methods'             => 'POST',
+            'callback'            => 'minime_request_password_reset',
+            'permission_callback' => '__return_true',
+        )
+    );
+    
+    register_rest_route(
+        'minime/v1',
+        'reset-password',
+        array(
+            'methods'             => 'POST',
+            'callback'            => 'minime_handle_reset_password',
+            'permission_callback' => '__return_true',
+        )
+    );
+} );
+
+function minime_login( WP_REST_Request $request ) {
+    $params   = $request->get_json_params();
+    $username = isset( $params['username'] ) ? sanitize_text_field( $params['username'] ) : '';
+    $password = isset( $params['password'] ) ? (string) $params['password'] : '';
+
+    // remember: default true to keep behavior, but can be overridden
+    $remember = array_key_exists( 'remember', $params ) ? (bool) $params['remember'] : true;
+
+    if ( $username === '' || $password === '' ) {
+        return new WP_Error(
+            'missing_credentials',
+            __( 'Username (or email) and password are required.', 'minime' ),
+            array( 'status' => 400 )
+        );
+    }
+
+    // Support login via email (convert to username)
+    if ( strpos( $username, '@' ) !== false ) {
+        $user_obj = get_user_by( 'email', $username );
+        if ( $user_obj ) {
+            $username = $user_obj->user_login;
+        }
+    }
+
+    $creds = array(
+        'user_login'    => $username,
+        'user_password' => $password,
+        'remember'      => $remember,
+    );
+
+    $user = wp_signon( $creds, is_ssl() );
+
+    if ( is_wp_error( $user ) ) {
+        return new WP_Error(
+            'invalid_credentials',
+            __( 'Invalid username/email or password.', 'minime' ),
+            array( 'status' => 401 )
+        );
+    }
+
+    wp_set_current_user( $user->ID );
+
+    // Generate token – if remember is true, make it longer
+    $token = wp_generate_password( 32, false );
+    $ttl   = $remember ? 7 * DAY_IN_SECONDS : DAY_IN_SECONDS;
+
+    set_transient(
+        'minime_api_token_' . $token,
+        (int) $user->ID,
+        $ttl
+    );
+
+    return rest_ensure_response( array(
+        'ok'    => true,
+        'token' => $token,
+        'user'  => array(
+            'id'    => $user->ID,
+            'email' => $user->user_email,
+            'name'  => $user->display_name,
+        ),
+    ) );
+}
+
+/**
+ * Request password reset endpoint - uses WordPress core retrieve_password()
+ * This triggers our custom email filters for branded reset emails.
+ */
+function minime_request_password_reset( WP_REST_Request $request ) {
+    $params = $request->get_json_params();
+    $email_or_login = isset( $params['email'] ) ? sanitize_text_field( $params['email'] ) : '';
+
+    if ( empty( $email_or_login ) ) {
+        return new WP_Error(
+            'missing_email',
+            __( 'Email address or username is required.', 'minime' ),
+            array( 'status' => 400 )
+        );
+    }
+
+    // Try to find user by email first, then by login
+    $user = get_user_by( 'email', $email_or_login );
+    
+    if ( ! $user ) {
+        $user = get_user_by( 'login', $email_or_login );
+    }
+    
+    if ( ! $user ) {
+        // Don't reveal if email/username exists or not for security
+        return rest_ensure_response( array(
+            'ok'      => true,
+            'message' => __( 'If this email is registered, you will receive a password reset link shortly.', 'minime' ),
+        ) );
+    }
+
+    // Use WordPress core retrieve_password() function
+    // This triggers our custom email filters:
+    // - retrieve_password_title
+    // - retrieve_password_message
+    // - wp_mail_from
+    // - wp_mail_from_name
+    $result = retrieve_password( $user->user_login );
+    
+    if ( is_wp_error( $result ) ) {
+        // Check for specific error codes
+        $error_code = $result->get_error_code();
+        
+        // Don't expose sensitive error details to frontend
+        if ( in_array( $error_code, array( 'invalidcombo', 'invalid_email', 'invalid_username' ) ) ) {
+            // Generic success message for security
+            return rest_ensure_response( array(
+                'ok'      => true,
+                'message' => 'If this email is registered, you will receive a password reset link shortly.',
+            ) );
+        }
+        
+        // For other errors (like email sending failures), return error
+        return new WP_Error(
+            'reset_failed',
+            __( 'Unable to send password reset email. Please try again.', 'minime' ),
+            array( 'status' => 500 )
+        );
+    }
+
+    return rest_ensure_response( array(
+        'ok'      => true,
+        'message' => 'If this email is registered, you will receive a password reset link shortly.',
+    ) );
+}
+
+/**
+ * Handle password reset with new password.
+ * Endpoint: POST /minime/v1/reset-password
+ * Body: { key, login, password }
+ */
+function minime_handle_reset_password( WP_REST_Request $request ) {
+    $params = $request->get_json_params();
+    
+    $key      = isset( $params['key'] ) ? sanitize_text_field( $params['key'] ) : '';
+    $login    = isset( $params['login'] ) ? sanitize_text_field( $params['login'] ) : '';
+    $password = isset( $params['password'] ) ? $params['password'] : '';
+    
+    // Validate required fields
+    if ( empty( $key ) || empty( $login ) || empty( $password ) ) {
+        return new WP_Error(
+            'missing_fields',
+            __( 'Reset key, login, and new password are all required.', 'minime' ),
+            array( 'status' => 400 )
+        );
+    }
+    
+    // Validate the reset key
+    $user = check_password_reset_key( $key, $login );
+    
+    if ( is_wp_error( $user ) ) {
+        $error_message = $user->get_error_message();
+        
+        return new WP_Error(
+            'invalid_key',
+            $error_message ? $error_message : __( 'Invalid or expired reset key.', 'minime' ),
+            array( 'status' => 403 )
+        );
+    }
+    
+    // Key is valid, user object returned - reset the password
+    reset_password( $user, $password );
+    
+    return rest_ensure_response( array(
+        'ok'      => true,
+        'message' => __( 'Password reset successfully. You can now log in with your new password.', 'minime' ),
+    ) );
+}
+
+/* ------------------------------------------------------------------------- */
+/*  AUTH HELPERS – token-based + cookie fallback
+/* ------------------------------------------------------------------------- */
+
+function minime_verify_token( WP_REST_Request $request, $capability ) {
+    // 1) header token
+    $token = $request->get_header( 'x-minime-token' );
+
+    // 2) query param fallback
+    if ( ! $token ) {
+        $token = $request->get_param( 'token' );
+    }
+
+    // no token → fallback to cookie-based WP auth
+    if ( ! $token ) {
+        if ( current_user_can( $capability ) ) {
+            return true;
+        }
+
+        return new WP_Error(
+            'forbidden',
+            __( 'You must be logged in as an administrator.', 'minime' ),
+            array( 'status' => 403 )
+        );
+    }
+
+    $user_id = get_transient( 'minime_api_token_' . $token );
+    if ( ! $user_id ) {
+        return new WP_Error(
+            'forbidden',
+            __( 'Authentication token is invalid or expired.', 'minime' ),
+            array( 'status' => 403 )
+        );
+    }
+
+    $user = get_user_by( 'id', $user_id );
+    if ( ! $user ) {
+        return new WP_Error(
+            'forbidden',
+            __( 'User not found for this token.', 'minime' ),
+            array( 'status' => 403 )
+        );
+    }
+
+    wp_set_current_user( $user_id );
+
+    if ( ! user_can( $user, $capability ) ) {
+        return new WP_Error(
+            'forbidden',
+            __( 'You must be logged in as an administrator.', 'minime' ),
+            array( 'status' => 403 )
+        );
+    }
+
+    return true;
+}
+
+function minime_permission_admin( WP_REST_Request $request ) {
+    return minime_verify_token( $request, 'manage_options' );
+}
+
+function minime_permission_upload( WP_REST_Request $request ) {
+    return minime_verify_token( $request, 'upload_files' );
+}
+
+/* ------------------------------------------------------------------------- */
+/*  POST /minime/v1/save  – ONE BUTTON SAVE EVERYTHING
+/* ------------------------------------------------------------------------- */
+
+add_action( 'rest_api_init', function () {
+    register_rest_route(
+        'minime/v1',
+        'save',
+        array(
+            'methods'             => 'POST',
+            'callback'            => 'minime_save_all',
+            'permission_callback' => 'minime_permission_admin',
+        )
+    );
+} );
+
+function minime_save_all( WP_REST_Request $request ) {
+    $params   = $request->get_json_params();
+    $settings = minime_get_settings();
+
+    // --- Site Title / Tagline ---
+    // sanitize short text fields
+    $site_title   = isset( $params['site_title'] ) ? sanitize_text_field( $params['site_title'] ) : '';
+    $site_tagline = isset( $params['site_tagline'] ) ? sanitize_text_field( $params['site_tagline'] ) : '';
+
+    if ( $site_title !== '' ) {
+        update_option( 'blogname', $site_title );
+    }
+    if ( $site_tagline !== '' ) {
+        update_option( 'blogdescription', $site_tagline );
+    }
+
+    // --- Site Icon (avatar) – attachment ID ---
+    $site_icon_id = 0;
+    if ( isset( $params['site_icon_id'] ) ) {
+        $site_icon_id = (int) $params['site_icon_id'];
+        if ( $site_icon_id > 0 ) {
+            update_option( 'site_icon', $site_icon_id );
+        }
+    }
+
+    // --- Bio ---
+    // Allow basic post HTML but strip dangerous tags/attributes
+    if ( isset( $params['bio'] ) ) {
+        $settings['bio'] = wp_kses_post( $params['bio'] );
+    }
+
+    // --- Background ---
+    $bg = $settings['background'];
+
+    if ( isset( $params['background'] ) && is_array( $params['background'] ) ) {
+        $bg_input = $params['background'];
+
+        if ( isset( $bg_input['type'] ) ) {
+            $bg['type'] = sanitize_text_field( $bg_input['type'] );
+        }
+
+        if ( isset( $bg_input['image_id'] ) ) {
+            $bg['image_id'] = (int) $bg_input['image_id'];
+        }
+
+        if ( isset( $bg_input['color'] ) ) {
+            // sanitize color value (fallback to safe default)
+            $bg['color'] = sanitize_hex_color( $bg_input['color'] ) ?: '#000000';
+        }
+
+        if ( isset( $bg_input['gradient'] ) && is_array( $bg_input['gradient'] ) ) {
+            $g = $bg_input['gradient'];
+
+            $colors = array();
+            if ( isset( $g['colors'] ) && is_array( $g['colors'] ) ) {
+                // sanitize each gradient color
+                foreach ( $g['colors'] as $c ) {
+                    $c = sanitize_hex_color( $c );
+                    if ( $c ) {
+                        $colors[] = $c;
+                    }
+                }
+            }
+            $angle = isset( $g['angle'] ) ? (int) $g['angle'] : 180;
+            if ( $angle < 0 )   $angle = 0;
+            if ( $angle > 360 ) $angle = 360;
+
+            $bg['gradient'] = array(
+                'colors' => $colors,
+                'angle'  => $angle,
+            );
+        }
+
+        if ( isset( $bg_input['custom_code'] ) ) {
+            // --- Decode Base64 and Sanitize `custom_code` before storing ---
+            // Admin.js sends Base64-encoded to prevent JSON corruption.
+            // We allow <style> tags for custom backgrounds but strip scripts/PHP.
+            $encoded = (string) $bg_input['custom_code'];
+            $decoded = base64_decode( $encoded, true );
+            
+            if ( $decoded !== false ) {
+                // Remove PHP open/close tags completely
+                $decoded = str_replace( array('<?php', '<?', '?>'), '', $decoded );
+                
+                // Strip any <script>...</script> blocks to avoid storing active scripts
+                $decoded = preg_replace( '#<script\b[^>]*>(.*?)</script>#is', '', $decoded );
+                
+                // Allow style tags + common HTML for custom backgrounds
+                // wp_kses_post strips <style>, so we use wp_kses with custom allowed tags
+                $allowed_tags = wp_kses_allowed_html( 'post' );
+                $allowed_tags['style'] = array('type' => true);  // ← NOW ALLOWS <style> TAGS!
+                $allowed_tags['div'] = array('class' => true, 'id' => true, 'style' => true);
+                $allowed_tags['iframe'] = array(
+                    'src' => true,
+                    'width' => true,
+                    'height' => true,
+                    'frameborder' => true,
+                    'allowfullscreen' => true,
+                    'style' => true,
+                    'class' => true,
+                );
+                $allowed_tags['canvas'] = array(
+                    'id' => true,
+                    'class' => true,
+                    'style' => true,
+                    'width' => true,
+                    'height' => true,
+                );
+                
+                $bg['custom_code'] = wp_kses( $decoded, $allowed_tags );
+            } else {
+                // Base64 decode failed, store empty string
+                $bg['custom_code'] = '';
+            }
+        }
+    }
+
+    $settings['background'] = $bg;
+
+    // --- Card Background (separate from page background) ---
+    $card_bg = isset( $settings['card_background'] ) ? $settings['card_background'] : array();
+
+    if ( isset( $params['card_background'] ) && is_array( $params['card_background'] ) ) {
+        $card_bg_input = $params['card_background'];
+
+        // Type: solid or gradient
+        if ( isset( $card_bg_input['type'] ) ) {
+            $type = sanitize_text_field( $card_bg_input['type'] );
+            $card_bg['type'] = in_array( $type, array( 'solid', 'gradient' ), true ) ? $type : 'solid';
+        }
+
+        // Solid color
+        if ( isset( $card_bg_input['color'] ) ) {
+            $card_bg['color'] = sanitize_hex_color( $card_bg_input['color'] ) ?: '#ffffff';
+        }
+
+        // Gradient
+        if ( isset( $card_bg_input['gradient'] ) && is_array( $card_bg_input['gradient'] ) ) {
+            $g = $card_bg_input['gradient'];
+
+            $colors = array();
+            if ( isset( $g['colors'] ) && is_array( $g['colors'] ) ) {
+                foreach ( $g['colors'] as $c ) {
+                    $c = sanitize_hex_color( $c );
+                    if ( $c ) {
+                        $colors[] = $c;
+                    }
+                }
+            }
+            // Limit to 3 colors
+            $colors = array_slice( $colors, 0, 3 );
+            if ( empty( $colors ) ) {
+                $colors = array( '#ffffff', '#eeeeee' );
+            }
+
+            $angle = isset( $g['angle'] ) ? (int) $g['angle'] : 135;
+            if ( $angle < 0 )   $angle = 0;
+            if ( $angle > 360 ) $angle = 360;
+
+            $card_bg['gradient'] = array(
+                'colors' => $colors,
+                'angle'  => $angle,
+            );
+        }
+    }
+
+    $settings['card_background'] = $card_bg;
+
+    // --- Socials ---
+    if ( isset( $params['socials'] ) && is_array( $params['socials'] ) ) {
+        $socials_clean = array();
+        foreach ( $params['socials'] as $row ) {
+            if ( ! is_array( $row ) ) {
+                continue;
+            }
+
+            // Short text fields: sanitize_text_field
+            $type_raw  = isset( $row['type'] ) ? $row['type'] : '';
+            $value_raw = isset( $row['value'] ) ? $row['value'] : '';
+
+            $type  = sanitize_text_field( $type_raw ); // sanitized type
+            $value = sanitize_text_field( $value_raw ); // sanitized short value
+
+            if ( $type === '' && $value === '' ) {
+                continue;
+            }
+
+            // If the sanitized value looks like a URL, make sure to store a safe URL
+            if ( preg_match( '~^https?://~i', $value ) || strpos( $value, '//' ) === 0 ) {
+                $value = esc_url_raw( $value ); // store safe URL
+            }
+
+            $socials_clean[] = array(
+                'type'  => $type,
+                'value' => $value,
+            );
+        }
+        $settings['socials'] = $socials_clean;
+    }
+
+    // --- Buttons ---
+    if ( isset( $params['buttons'] ) && is_array( $params['buttons'] ) ) {
+        $buttons_clean = array();
+        foreach ( $params['buttons'] as $row ) {
+            if ( ! is_array( $row ) ) {
+                continue;
+            }
+
+            // Short text fields: sanitize_text_field
+            $label_raw = isset( $row['label'] ) ? $row['label'] : '';
+            $value_raw = isset( $row['value'] ) ? $row['value'] : '';
+
+            $label = sanitize_text_field( $label_raw );
+            $value = sanitize_text_field( $value_raw );
+
+            if ( $label === '' && $value === '' ) {
+                continue;
+            }
+
+            // If value looks like a URL, ensure it's safely stored
+            if ( preg_match( '~^https?://~i', $value ) || strpos( $value, '//' ) === 0 ) {
+                $value = esc_url_raw( $value );
+            }
+
+            $buttons_clean[] = array(
+                'label' => $label,
+                'value' => $value,
+            );
+        }
+        $settings['buttons'] = $buttons_clean;
+    }
+
+    // --- Keep Homepage Setting ---
+    $keep_homepage = ! empty( $params['keep_homepage'] );
+    $settings['keep_homepage'] = $keep_homepage;
+
+    // --- Branding Footer Text ---
+    if ( isset( $params['branding_footer_text'] ) ) {
+        $settings['branding_footer_text'] = sanitize_text_field( $params['branding_footer_text'] );
+    }
+
+    minime_update_settings( $settings );
+
+    // Apply front page logic based on keep_homepage setting
+    $front_page_id = (int) get_option( 'minime_front_page_id', 0 );
+    if ( $front_page_id && current_user_can( 'manage_options' ) ) {
+        minime_maybe_set_front_page( $front_page_id, $settings );
+    }
+
+    return rest_ensure_response( array(
+        'ok'      => true,
+        'message' => __( 'Settings saved successfully.', 'minime' ),
+    ) );
+}
+
+/* ------------------------------------------------------------------------- */
+/*  POST /minime/v1/upload-image – media upload helper
+/* ------------------------------------------------------------------------- */
+
+add_action( 'rest_api_init', function () {
+    register_rest_route(
+        'minime/v1',
+        'upload-image',
+        array(
+            'methods'             => 'POST',
+            'callback'            => 'minime_upload_image',
+            'permission_callback' => 'minime_permission_upload',
+        )
+    );
+} );
+
+function minime_upload_image( WP_REST_Request $request ) {
+    $files = $request->get_file_params();
+
+    if ( empty( $files ) || ! isset( $files['file'] ) ) {
+        return new WP_Error(
+            'no_file',
+            __( 'No file uploaded.', 'minime' ),
+            array( 'status' => 400 )
+        );
+    }
+
+    $file = $files['file'];
+
+    if ( ! function_exists( 'media_handle_sideload' ) ) {
+        require_once ABSPATH . 'wp-admin/includes/file.php';
+        require_once ABSPATH . 'wp-admin/includes/media.php';
+        require_once ABSPATH . 'wp-admin/includes/image.php';
+    }
+
+    $attachment_id = media_handle_sideload(
+        array(
+            'name'     => $file['name'],
+            'type'     => $file['type'],
+            'tmp_name' => $file['tmp_name'],
+            'error'    => $file['error'],
+            'size'     => $file['size'],
+        ),
+        0
+    );
+
+    if ( is_wp_error( $attachment_id ) ) {
+        return new WP_Error(
+            'upload_error',
+            $attachment_id->get_error_message(),
+            array( 'status' => 500 )
+        );
+    }
+
+    $url = wp_get_attachment_url( $attachment_id );
+
+    return rest_ensure_response( array(
+        'ok'  => true,
+        'id'  => $attachment_id,
+        'url' => $url,
+    ) );
+}
+
+/**
+ * Render the public card (Link in Bio) page.
+ * Shortcode: [minime_link_in_bio]
+ */
+function minime_render_card_shortcode() {
+    // Enqueue public assets
+    wp_enqueue_style(
+        'minime-style',
+        minime_asset_url( 'assets/style.css' ),
+        array(),
+        MINIME_PLUGIN_VERSION
+    );
+
+    wp_enqueue_script(
+        'minime-app',
+        minime_asset_url( 'assets/app.js' ),
+        array(),
+        MINIME_PLUGIN_VERSION,
+        true
+    );
+
+    // Pass config to JS
+    $config = array(
+        'baseUrl'   => trailingslashit( home_url() ),
+        'frontSlug' => MINIME_FRONT_SLUG,
+        'adminSlug' => MINIME_ADMIN_SLUG,
+        'restRoot'  => esc_url_raw( get_rest_url( null, 'minime/v1' ) ),
+    );
+
+    wp_localize_script(
+        'minime-app',
+        'MINIME_CONFIG',
+        $config
+    );
+
+    ob_start();
+    ?>
+    <div id="app"></div>
+    <?php
+    return ob_get_clean();
+}
+
+/**
+ * Render the admin panel SPA.
+ * Shortcode: [minime_admin_panel]
+ */
+function minime_render_admin_shortcode() {
+    // Enqueue admin assets
+    wp_enqueue_style(
+        'minime-admin-style',
+        minime_asset_url( 'assets/admin/admin.css' ),
+        array(),
+        MINIME_PLUGIN_VERSION
+    );
+
+    wp_enqueue_script(
+        'minime-admin-app',
+        minime_asset_url( 'assets/admin/admin.js' ),
+        array(),
+        MINIME_PLUGIN_VERSION,
+        true
+    );
+
+    // Pass config to JS
+    $config = array(
+        'baseUrl'   => trailingslashit( home_url() ),
+        'frontSlug' => MINIME_FRONT_SLUG,
+        'adminSlug' => MINIME_ADMIN_SLUG,
+        'restRoot'  => esc_url_raw( get_rest_url( null, 'minime/v1' ) ),
+    );
+
+    wp_localize_script(
+        'minime-admin-app',
+        'MINIME_CONFIG',
+        $config
+    );
+
+    ob_start();
+    ?>
+    <div class="shell">
+        <div class="card">
+
+            <!-- LOGIN VIEW -->
+            <div id="lb-login-view">
+                <div class="headline">minime dashboard</div>
+                <div class="title">Sign in to minime</div>
+
+                <form id="lb-login-form" class="stack" autocomplete="on">
+                    <div class="field">
+                        <label for="lb-login-email">Email or username</label>
+                        <input id="lb-login-email" type="text" autocomplete="username" placeholder="you@example.com" required />
+                    </div>
+                    <div class="field">
+                        <label for="lb-login-password">Password</label>
+                        <input id="lb-login-password" type="password" autocomplete="current-password" placeholder="••••••••" required />
+                    </div>
+
+                    <div class="checkbox-row">
+                        <input id="lb-remember-me" type="checkbox" />
+                        <label for="lb-remember-me">Remember me on this browser</label>
+                    </div>
+
+                    <div class="login-help">
+                        <a href="#" id="lb-forgot-password">Forgot your password?</a>
+                    </div>
+
+                    <button type="submit" class="btn btn-primary">Log in</button>
+
+                    <div class="status" id="lb-login-status"></div>
+                </form>
+                
+                <!-- Password Reset Form -->
+                <form id="lb-reset-form" class="stack" style="display:none;">
+                    <div class="field">
+                        <label for="lb-reset-email">Email Address</label>
+                        <input id="lb-reset-email" type="email" autocomplete="email" placeholder="you@example.com" required />
+                    </div>
+
+                    <button type="submit" class="btn btn-primary">Send Reset Link</button>
+                    <button type="button" id="lb-back-to-login" class="btn btn-ghost">Back to Login</button>
+
+                    <div class="status" id="lb-reset-status"></div>
+                </form>
+            </div>
+
+            <!-- SETTINGS VIEW -->
+            <div id="lb-settings-view" hidden>
+                <div class="topbar">
+                    <div>
+                        <div class="headline">minime settings</div>
+                        <div class="title">Edit your public minime page</div>
+                    </div>
+                    <div class="stack-sm" style="align-items:flex-end;">
+                        <button id="lb-logout-btn" class="btn btn-ghost btn-small">Log out</button>
+                        <div class="status" id="lb-settings-status">Connected to WordPress.</div>
+                    </div>
+                </div>
+
+                <div class="row">
+                    <!-- LEFT COLUMN: PROFILE + BACKGROUND -->
+                    <div class="col stack">
+
+                        <div class="section">
+                            <div class="section-header">
+                                <div class="section-title">Profile (from WordPress)</div>
+                                <div class="pill">Identity</div>
+                            </div>
+
+                            <div class="field">
+                                <label for="lb-site-title">Site Title (Name)</label>
+                                <input id="lb-site-title" type="text" placeholder="Site title" />
+                            </div>
+
+                            <div class="field">
+                                <label for="lb-site-tagline">Tagline (Subtitle)</label>
+                                <input id="lb-site-tagline" type="text" placeholder="Short tagline" />
+                            </div>
+
+                            <div class="field">
+                                <label for="lb-bio">Bio (Card description)</label>
+                                <textarea id="lb-bio" placeholder="Write a short bio for the card"></textarea>
+                            </div>
+
+                            <div class="field">
+                                <label for="lb-footer-text">Footer Branding Text</label>
+                                <input id="lb-footer-text" type="text" placeholder="Powered by · Ayop · Headless WP · REST API" />
+                                <div class="bg-hint">This text appears in the footer of your link-in-bio card.</div>
+                            </div>
+
+                            <div class="field">
+                                <label>Avatar / Site Icon</label>
+                                <div class="list-row">
+                                    <img id="lb-avatar-preview" class="avatar-preview" src="" alt="Avatar preview" />
+                                    <div class="stack-sm">
+                                        <input id="lb-avatar-file" type="file" accept="image/*" />
+                                        <div class="bg-hint">This image will be used as both the card avatar and the site favicon.</div>
+                                    </div>
+                                </div>
+                                <input id="lb-site-icon-id" type="hidden" />
+                            </div>
+                        </div>
+
+                        <div class="section">
+                            <div class="section-header">
+                                <div class="section-title">Background</div>
+                                <div class="pill">Visuals</div>
+                            </div>
+
+                            <div class="field">
+                                <label for="lb-bg-type">Background Type</label>
+                                <select id="lb-bg-type">
+                                    <option value="image">Image</option>
+                                    <option value="color">Solid Color</option>
+                                    <option value="gradient">Gradient</option>
+                                    <option value="custom">Custom HTML / CSS / JS</option>
+                                </select>
+                            </div>
+
+                            <!-- IMAGE -->
+                            <div id="lb-bg-image-block" class="stack-sm">
+                                <div class="field">
+                                    <label>Background Image</label>
+                                    <div class="list-row">
+                                        <input id="lb-bg-image-file" type="file" accept="image/*" />
+                                        <button type="button" id="lb-bg-image-upload-btn" class="btn btn-small">Upload</button>
+                                    </div>
+                                    <input id="lb-bg-image-id" type="hidden" />
+                                    <div class="bg-hint">Recommended large, high-quality image.</div>
+                                </div>
+                            </div>
+
+                            <!-- COLOR -->
+                            <div id="lb-bg-color-block" class="stack-sm" hidden>
+                                <div class="field">
+                                    <label for="lb-bg-color">Background Color</label>
+                                    <input id="lb-bg-color" type="color" value="#000000" />
+                                </div>
+                            </div>
+
+                            <!-- GRADIENT -->
+                            <div id="lb-bg-gradient-block" class="stack-sm" hidden>
+                                <div class="field">
+                                    <label>Gradient Colors (2–3 colors)</label>
+                                    <div class="list-row">
+                                        <input id="lb-bg-grad-color-1" type="color" value="#111827" />
+                                        <input id="lb-bg-grad-color-2" type="color" value="#1f2937" />
+                                        <input id="lb-bg-grad-color-3" type="color" />
+                                    </div>
+                                </div>
+                                <div class="field">
+                                    <label for="lb-bg-gradient-angle">Gradient Angle (0–360)</label>
+                                    <input id="lb-bg-gradient-angle" type="number" min="0" max="360" step="1" value="180" />
+                                </div>
+                            </div>
+
+                            <!-- CUSTOM CODE -->
+                            <div id="lb-bg-custom-block" class="stack-sm" hidden>
+                                <div class="field">
+                                    <label for="lb-bg-custom-code">Custom HTML / CSS / JS</label>
+                                    <textarea id="lb-bg-custom-code" placeholder="Paste custom HTML/CSS/JS to render the background. PHP is not allowed."></textarea>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="section">
+                            <div class="section-header">
+                                <div class="section-title">Card Background</div>
+                                <div class="pill">Visuals</div>
+                            </div>
+
+                            <div class="field">
+                                <label for="lb-card-bg-type">Card Background Type</label>
+                                <select id="lb-card-bg-type">
+                                    <option value="solid">Solid Color</option>
+                                    <option value="gradient">Gradient</option>
+                                </select>
+                            </div>
+
+                            <!-- SOLID COLOR -->
+                            <div id="lb-card-bg-solid-block" class="stack-sm">
+                                <div class="field">
+                                    <label for="lb-card-bg-color">Card Background Color</label>
+                                    <input id="lb-card-bg-color" type="color" value="#ffffff" />
+                                </div>
+                            </div>
+
+                            <!-- GRADIENT -->
+                            <div id="lb-card-bg-gradient-block" class="stack-sm" hidden>
+                                <div class="field">
+                                    <label>Gradient Colors (2–3 colors)</label>
+                                    <div class="list-row">
+                                        <input id="lb-card-bg-grad-color-1" type="color" value="#ffffff" />
+                                        <input id="lb-card-bg-grad-color-2" type="color" value="#eeeeee" />
+                                        <input id="lb-card-bg-grad-color-3" type="color" />
+                                    </div>
+                                </div>
+                                <div class="field">
+                                    <label for="lb-card-bg-gradient-angle">Gradient Angle (0–360)</label>
+                                    <input id="lb-card-bg-gradient-angle" type="number" min="0" max="360" step="1" value="135" />
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- RIGHT COLUMN: SOCIALS + BUTTONS + SAVE -->
+                    <div class="col stack">
+
+                        <div class="section">
+                            <div class="section-header">
+                                <div class="section-title">Social Links</div>
+                                <div class="pill">Channels</div>
+                            </div>
+
+                            <div id="lb-socials-list" class="list"></div>
+
+                            <button type="button" id="lb-add-social" class="btn btn-small btn-ghost">+ Add social link</button>
+                        </div>
+
+                        <div class="section">
+                            <div class="section-header">
+                                <div class="section-title">Buttons</div>
+                                <div class="pill">Call to Action</div>
+                            </div>
+
+                            <div id="lb-buttons-list" class="list"></div>
+
+                            <button type="button" id="lb-add-button" class="btn btn-small btn-ghost">+ Add button</button>
+                        </div>
+
+                        <div class="section">
+                            <div class="section-header">
+                                <div class="section-title">Save</div>
+                            </div>
+
+                            <p class="bg-hint" style="margin-bottom:12px;">
+                                One single <strong>Save</strong> button to apply all changes:
+                                profile, background, socials and buttons.  
+                                Changes will update WordPress Site Title, Tagline and Site Icon automatically.
+                            </p>
+
+                            <label class="mm-toggle" style="display:flex;align-items:center;gap:8px;margin-bottom:16px;cursor:pointer;font-size:12px;">
+                                <input type="checkbox" id="mm-keep-homepage" style="cursor:pointer;">
+                                <span style="user-select:none;">Keep my current homepage (don't set minime as front page)</span>
+                            </label>
+
+                            <button type="button" id="lb-save-all" class="btn btn-primary" style="width:100%;margin-bottom:8px;">Save all changes</button>
+                            <button type="button" id="mm-view-public" class="btn btn-secondary" style="width:100%;" disabled>View my minime</button>
+                        </div>
+
+                    </div>
+                </div>
+            </div>
+
+        </div>
+    </div>
+    <?php
+    return ob_get_clean();
+}
+
+// -------------------------------------------------------------------------
+// Admin page in WordPress Dashboard (read-only overview)
+// -------------------------------------------------------------------------
+
+add_action( 'admin_menu', function () {
+    add_menu_page(
+        'minime',
+        'minime',
+        'manage_options',
+        'minime-dashboard',
+        'minime_render_admin_page',
+        'dashicons-admin-links',
+        25
+    );
+} );
+
+function minime_render_admin_page() {
+    if ( ! current_user_can( 'manage_options' ) ) {
+        return;
+    }
+
+    // Handle form submission
+    if ( isset( $_POST['minime_overview_form'] )
+         && isset( $_POST['minime_overview_nonce'] )
+         && wp_verify_nonce( $_POST['minime_overview_nonce'], 'minime_save_overview' )
+         && current_user_can( 'manage_options' ) ) {
+        
+        $settings = minime_get_settings();
+        
+        // Site Title & Tagline (WordPress core options)
+        if ( isset( $_POST['site_title'] ) ) {
+            update_option( 'blogname', sanitize_text_field( $_POST['site_title'] ) );
+        }
+        if ( isset( $_POST['site_tagline'] ) ) {
+            update_option( 'blogdescription', sanitize_text_field( $_POST['site_tagline'] ) );
+        }
+        
+        // Bio
+        if ( isset( $_POST['bio'] ) ) {
+            $settings['bio'] = wp_kses_post( $_POST['bio'] );
+        }
+        
+        // Site Icon (avatar) - store attachment ID
+        if ( isset( $_POST['site_icon_id'] ) ) {
+            $icon_id = intval( $_POST['site_icon_id'] );
+            if ( $icon_id > 0 ) {
+                update_option( 'site_icon', $icon_id );
+            }
+        }
+        
+        // Background
+        $bg = $settings['background'];
+        
+        if ( isset( $_POST['background_type'] ) ) {
+            $bg['type'] = sanitize_text_field( $_POST['background_type'] );
+        }
+        
+        if ( isset( $_POST['background_color'] ) ) {
+            $color = sanitize_hex_color( $_POST['background_color'] );
+            if ( $color ) {
+                $bg['color'] = $color;
+            }
+        }
+        
+        if ( isset( $_POST['background_image_id'] ) ) {
+            $bg['image_id'] = intval( $_POST['background_image_id'] );
+        }
+        
+        if ( isset( $_POST['background_gradient_angle'] ) ) {
+            $angle = intval( $_POST['background_gradient_angle'] );
+            if ( $angle < 0 ) $angle = 0;
+            if ( $angle > 360 ) $angle = 360;
+            $bg['gradient']['angle'] = $angle;
+        }
+        
+        if ( isset( $_POST['background_gradient_colors'] ) ) {
+            $colors_input = sanitize_text_field( $_POST['background_gradient_colors'] );
+            $colors = array_map( 'trim', explode( ',', $colors_input ) );
+            $colors_clean = array();
+            foreach ( $colors as $c ) {
+                $sanitized = sanitize_hex_color( $c );
+                if ( $sanitized ) {
+                    $colors_clean[] = $sanitized;
+                }
+            }
+            $bg['gradient']['colors'] = $colors_clean;
+        }
+        
+        if ( isset( $_POST['background_custom_code'] ) ) {
+            // Store custom code as-is (same format as SPA uses - decoded HTML)
+            $custom = wp_kses_post( $_POST['background_custom_code'] );
+            $bg['custom_code'] = $custom;
+        }
+        
+        $settings['background'] = $bg;
+        
+        minime_update_settings( $settings );
+        
+        echo '<div class="notice notice-success is-dismissible"><p>minime settings updated successfully.</p></div>';
+    }
+
+    $settings      = minime_get_settings();
+    $site_title    = get_bloginfo( 'name' );
+    $site_tagline  = get_bloginfo( 'description' );
+    $site_icon_id  = (int) get_option( 'site_icon', 0 );
+    $site_icon_url = $site_icon_id ? wp_get_attachment_url( $site_icon_id ) : '';
+
+    $bg = isset( $settings['background'] ) ? $settings['background'] : array();
+    $bg_type = isset( $bg['type'] ) ? $bg['type'] : 'image';
+
+    $socials = isset( $settings['socials'] ) && is_array( $settings['socials'] ) ? $settings['socials'] : array();
+    $buttons = isset( $settings['buttons'] ) && is_array( $settings['buttons'] ) ? $settings['buttons'] : array();
+    ?>
+    <div class="wrap">
+        <h1>minime – Settings</h1>
+        <p class="description">
+            Edit your minime settings here. These values are used by the public card and the admin panel.
+        </p>
+
+        <hr />
+
+        <form method="post" action="">
+            <?php wp_nonce_field( 'minime_save_overview', 'minime_overview_nonce' ); ?>
+            <input type="hidden" name="minime_overview_form" value="1">
+
+            <h2>Identity</h2>
+            <table class="form-table" role="presentation">
+                <tr>
+                    <th scope="row"><label for="site_title">Site Title (Name)</label></th>
+                    <td>
+                        <input type="text" id="site_title" name="site_title" value="<?php echo esc_attr( $site_title ); ?>" class="regular-text">
+                        <p class="description">Used as the main title on your minime card.</p>
+                    </td>
+                </tr>
+                <tr>
+                    <th scope="row"><label for="site_tagline">Tagline (Subtitle)</label></th>
+                    <td>
+                        <input type="text" id="site_tagline" name="site_tagline" value="<?php echo esc_attr( $site_tagline ); ?>" class="regular-text">
+                        <p class="description">A short tagline or subtitle.</p>
+                    </td>
+                </tr>
+                <tr>
+                    <th scope="row"><label for="bio">Bio</label></th>
+                    <td>
+                        <textarea id="bio" name="bio" rows="4" class="large-text"><?php echo esc_textarea( $settings['bio'] ); ?></textarea>
+                        <p class="description">Card description or bio text.</p>
+                    </td>
+                </tr>
+                <tr>
+                    <th scope="row">Avatar / Site Icon</th>
+                    <td>
+                        <?php if ( $site_icon_url ) : ?>
+                            <img src="<?php echo esc_url( $site_icon_url ); ?>" alt="" style="width:64px;height:64px;border-radius:50%;border:1px solid #ccd0d4;object-fit:cover;margin-bottom:8px;display:block;" />
+                        <?php endif; ?>
+                        <input type="hidden" id="site_icon_id" name="site_icon_id" value="<?php echo esc_attr( $site_icon_id ); ?>">
+                        <input type="text" id="site_icon_url_display" value="<?php echo esc_attr( $site_icon_url ); ?>" class="regular-text" readonly>
+                        <p class="description">This is the same avatar used on the public minime card. To change it, use the <a href="<?php echo esc_url( admin_url( 'options-general.php' ) ); ?>">Site Icon</a> setting or the minime admin panel.</p>
+                    </td>
+                </tr>
+            </table>
+
+            <h2>Background</h2>
+            <table class="form-table" role="presentation">
+                <tr>
+                    <th scope="row"><label for="background_type">Background Type</label></th>
+                    <td>
+                        <select id="background_type" name="background_type" class="regular-text">
+                            <option value="image" <?php selected( $bg_type, 'image' ); ?>>Image</option>
+                            <option value="color" <?php selected( $bg_type, 'color' ); ?>>Solid Color</option>
+                            <option value="gradient" <?php selected( $bg_type, 'gradient' ); ?>>Gradient</option>
+                            <option value="custom" <?php selected( $bg_type, 'custom' ); ?>>Custom HTML/CSS</option>
+                        </select>
+                    </td>
+                </tr>
+                <tr>
+                    <th scope="row"><label for="background_image_id">Image ID</label></th>
+                    <td>
+                        <input type="number" id="background_image_id" name="background_image_id" value="<?php echo esc_attr( isset( $bg['image_id'] ) ? $bg['image_id'] : 0 ); ?>" class="regular-text">
+                        <p class="description">WordPress Media Library attachment ID for background image.</p>
+                    </td>
+                </tr>
+                <tr>
+                    <th scope="row"><label for="background_color">Background Color</label></th>
+                    <td>
+                        <input type="text" id="background_color" name="background_color" value="<?php echo esc_attr( isset( $bg['color'] ) ? $bg['color'] : '#000000' ); ?>" class="regular-text">
+                        <p class="description">Hex color code (e.g., #000000).</p>
+                    </td>
+                </tr>
+                <tr>
+                    <th scope="row"><label for="background_gradient_colors">Gradient Colors</label></th>
+                    <td>
+                        <?php
+                        $gradient = isset( $bg['gradient'] ) ? $bg['gradient'] : array();
+                        $colors = isset( $gradient['colors'] ) && is_array( $gradient['colors'] ) ? $gradient['colors'] : array();
+                        $colors_str = implode( ', ', $colors );
+                        ?>
+                        <input type="text" id="background_gradient_colors" name="background_gradient_colors" value="<?php echo esc_attr( $colors_str ); ?>" class="large-text">
+                        <p class="description">Comma-separated hex colors (e.g., #111827, #1f2937, #374151).</p>
+                    </td>
+                </tr>
+                <tr>
+                    <th scope="row"><label for="background_gradient_angle">Gradient Angle</label></th>
+                    <td>
+                        <?php $angle = isset( $gradient['angle'] ) ? (int) $gradient['angle'] : 180; ?>
+                        <input type="number" id="background_gradient_angle" name="background_gradient_angle" value="<?php echo esc_attr( $angle ); ?>" min="0" max="360" step="1" class="regular-text">
+                        <p class="description">Angle in degrees (0–360).</p>
+                    </td>
+                </tr>
+                <tr>
+                    <th scope="row"><label for="background_custom_code">Custom HTML/CSS</label></th>
+                    <td>
+                        <textarea id="background_custom_code" name="background_custom_code" rows="6" class="large-text code"><?php echo esc_textarea( isset( $bg['custom_code'] ) ? $bg['custom_code'] : '' ); ?></textarea>
+                        <p class="description">Custom HTML/CSS code for background. Scripts are not allowed.</p>
+                    </td>
+                </tr>
+            </table>
+
+            <p class="submit">
+                <button type="submit" class="button button-primary">Save Settings</button>
+            </p>
+        </form>
+
+        <hr />
+
+        <h2>Social Links</h2>
+        <?php if ( $socials ) : ?>
+            <table class="widefat striped">
+                <thead>
+                    <tr>
+                        <th>Type</th>
+                        <th>Value</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <?php foreach ( $socials as $row ) : ?>
+                        <tr>
+                            <td><code><?php echo esc_html( isset( $row['type'] ) ? $row['type'] : '' ); ?></code></td>
+                            <td><code><?php echo esc_html( isset( $row['value'] ) ? $row['value'] : '' ); ?></code></td>
+                        </tr>
+                    <?php endforeach; ?>
+                </tbody>
+            </table>
+        <?php else : ?>
+            <p><em>No social links defined.</em></p>
+        <?php endif; ?>
+
+        <h2>Buttons</h2>
+        <?php if ( $buttons ) : ?>
+            <table class="widefat striped">
+                <thead>
+                    <tr>
+                        <th>Label</th>
+                        <th>Value</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <?php foreach ( $buttons as $row ) : ?>
+                        <tr>
+                            <td><code><?php echo esc_html( isset( $row['label'] ) ? $row['label'] : '' ); ?></code></td>
+                            <td><code><?php echo esc_html( isset( $row['value'] ) ? $row['value'] : '' ); ?></code></td>
+                        </tr>
+                    <?php endforeach; ?>
+                </tbody>
+            </table>
+        <?php else : ?>
+            <p><em>No buttons defined.</em></p>
+        <?php endif; ?>
+
+        <hr />
+
+        <p>
+            <a href="<?php echo esc_url( home_url( '/' . MINIME_ADMIN_SLUG ) ); ?>" class="button button-primary" target="_blank" rel="noopener">
+                Open minime admin panel
+            </a>
+        </p>
+    </div>
+    <?php
+}

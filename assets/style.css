@@ -1,0 +1,384 @@
+/* Reset بسيط */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  min-height: 100%;
+}
+
+/* الخلفية بتيجي من الـ JS (gradient / image) */
+body {
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "SF Pro Text",
+    "Segoe UI", sans-serif;
+  color: #f9fafb;
+}
+
+/* جذر التطبيق */
+#app {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px 16px 32px;
+}
+
+/* الحاوية */
+.lb-page {
+  width: 100%;
+  max-width: 440px;
+}
+
+/* الكارت - Default neutral background (will be overridden by JS with card_background settings) */
+.lb-card {
+  background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+  border-radius: 24px;
+  padding: 26px 20px 18px;
+  margin: 0 auto;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.85);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  backdrop-filter: blur(16px);
+  text-align: center;
+  animation: lb-card-fade-in 0.5s ease-out;
+}
+
+/* الهيدر: نخليه عمودي (صورة فوق، نص تحت) */
+.lb-header {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+/* الصورة */
+.lb-avatar-wrap {
+  width: 128px;
+  height: 128px;
+  border-radius: 50%;
+  overflow: hidden;
+  margin-bottom: 16px;
+}
+
+.lb-avatar {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+/* النصوص */
+.lb-text {
+  max-width: 90%;
+}
+
+.lb-name {
+  margin: 0;
+  margin-bottom: 6px;
+  font-size: 1.25rem;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+}
+
+.lb-subtitle {
+  margin: 0;
+  margin-bottom: 10px;
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
+}
+
+.lb-bio {
+  margin: 0 auto 20px;
+  max-width: 100%;
+  font-size: 0.8rem;
+  line-height: 1.6;
+}
+
+/* السوشيال – دواير */
+.lb-socials {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 20px;
+}
+
+.lb-socials-row {
+  display: flex;
+  gap: 14px;
+  justify-content: center;
+}
+
+.lb-social {
+  width: 48px;
+  height: 48px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-decoration: none;
+  backdrop-filter: blur(12px);
+  transition: transform 0.2s ease, box-shadow 0.2s ease,
+    background 0.2s ease, border-color 0.2s ease, opacity 0.2s ease;
+}
+
+/* الكونتينر الداخلي للأيقونة */
+.lb-social-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+}
+
+/* الأيقونة نفسها */
+.lb-social-icon i {
+  font-size: 1.2rem;
+  line-height: 1;
+}
+
+/* Hover animation للسوشيال */
+.lb-social:hover {
+  transform: translateY(-2px) scale(1.03);
+}
+
+/* Accessible focus styles for keyboard users */
+.lb-btn:focus-visible,
+.lb-social:focus-visible {
+  outline-offset: 2px;
+}
+
+/* الأزرار */
+.lb-links {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-bottom: 18px;
+}
+
+/* كل الأزرار نفس الشكل (شفافة + outline) */
+.lb-btn {
+  display: block;
+  width: 100%;
+  border-radius: 999px;
+  padding: 13px 18px;
+  font-size: 0.8rem;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  text-align: center;
+  cursor: pointer;
+  text-decoration: none;
+  background: transparent;
+  backdrop-filter: blur(14px);
+  transition: transform 0.2s ease, box-shadow 0.2s ease,
+    background 0.2s ease, border-color 0.2s ease, opacity 0.2s ease;
+}
+
+/* variant classes intentionally inherit from .lb-btn (no extra rules) */
+
+/* Hover animation للـ buttons */
+.lb-btn:hover {
+  transform: translateY(-2px) scale(1.01);
+}
+
+/* Footer */
+.lb-footer {
+  font-size: 0.5rem;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+}
+
+/* Error box shown when the API fails to load */
+.lb-error {
+  background: rgba(0, 0, 0, 0.85);
+  border-radius: 16px;
+  padding: 16px 20px;
+  font-size: 0.85rem;
+  color: #fecaca;
+  border: 1px solid rgba(248, 113, 113, 0.6);
+  text-align: center;
+  max-width: 360px;
+  margin: 40px auto 0;
+  backdrop-filter: blur(12px);
+  box-shadow: 0 20px 60px rgba(0,0,0,0.6);
+}
+
+/* Animation للكارت نفسه */
+@keyframes lb-card-fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* خلفية HTML مخصصة (CodePen / iframe / إلخ) */
+.lb-bg-custom {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  overflow: hidden;
+  filter: brightness(0.4);
+}
+
+.lb-bg-custom iframe,
+.lb-bg-custom canvas {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  object-fit: cover;
+}
+
+/* Theme modifiers: auto-switch text colors based on card background */
+
+/* Dark card theme: light text for dark backgrounds */
+.lb-card--dark .lb-name {
+  color: #f9fafb;
+}
+
+.lb-card--dark .lb-subtitle {
+  color: #e5e7eb;
+}
+
+.lb-card--dark .lb-bio {
+  color: #d1d5db;
+}
+
+.lb-card--dark .lb-social {
+  border: 1px solid rgba(249, 250, 251, 0.7);
+  color: #f9fafb;
+  background: rgba(15, 23, 42, 0.4);
+}
+
+.lb-card--dark .lb-social-icon i {
+  color: #f9fafb;
+}
+
+.lb-card--dark .lb-social:hover {
+  border-color: rgba(255, 255, 255, 1);
+  background: rgba(15, 23, 42, 0.9);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.6);
+}
+
+.lb-card--dark .lb-btn {
+  border: 1px solid rgba(249, 250, 251, 0.7);
+  color: #f9fafb;
+}
+
+.lb-card--dark .lb-btn:hover {
+  border-color: rgba(255, 255, 255, 1);
+  background: rgba(15, 23, 42, 0.85);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.8);
+}
+
+.lb-card--dark .lb-btn:focus-visible,
+.lb-card--dark .lb-social:focus-visible {
+  outline: 2px solid #f9fafb;
+  outline-offset: 2px;
+}
+
+.lb-card--dark .lb-avatar-wrap {
+  border: 1px solid rgba(255, 255, 255, 0.8);
+  box-shadow: 0 18px 60px rgba(0, 0, 0, 0.7);
+  background: radial-gradient(circle at top, #111827, #020617);
+}
+
+.lb-card--dark .lb-footer {
+  color: #9ca3af;
+}
+
+/* Light card theme: dark text for light backgrounds */
+.lb-card--light .lb-name {
+  color: #111827;
+}
+
+.lb-card--light .lb-subtitle {
+  color: #4b5563;
+}
+
+.lb-card--light .lb-bio {
+  color: #6b7280;
+}
+
+.lb-card--light .lb-social {
+  border: 1px solid rgba(17, 24, 39, 0.2);
+  color: #111827;
+  background: rgba(255, 255, 255, 0.6);
+}
+
+.lb-card--light .lb-social-icon i {
+  color: #111827;
+}
+
+.lb-card--light .lb-social:hover {
+  border-color: rgba(17, 24, 39, 0.4);
+  background: rgba(255, 255, 255, 0.95);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.2);
+}
+
+.lb-card--light .lb-btn {
+  border: 1px solid rgba(17, 24, 39, 0.2);
+  color: #111827;
+}
+
+.lb-card--light .lb-btn:hover {
+  border-color: rgba(17, 24, 39, 0.4);
+  background: rgba(255, 255, 255, 0.7);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.15);
+}
+
+.lb-card--light .lb-btn:focus-visible,
+.lb-card--light .lb-social:focus-visible {
+  outline: 2px solid #111827;
+  outline-offset: 2px;
+}
+
+.lb-card--light .lb-avatar-wrap {
+  border: 1px solid rgba(17, 24, 39, 0.2);
+  box-shadow: 0 18px 60px rgba(0, 0, 0, 0.15);
+  background: radial-gradient(circle at top, #e5e7eb, #f3f4f6);
+}
+
+.lb-card--light .lb-footer {
+  color: #6b7280;
+}
+
+/* موبايل */
+@media (max-width: 480px) {
+  #app {
+    padding-top: 20px;
+    padding-bottom: 20px;
+  }
+
+  .lb-card {
+    padding: 24px 18px 16px;
+  }
+
+  .lb-avatar-wrap {
+    width: 118px;
+    height: 118px;
+  }
+
+  .lb-bio {
+    font-size: 0.78rem;
+  }
+
+  .lb-btn {
+    font-size: 0.76rem;
+    padding: 12px 14px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
