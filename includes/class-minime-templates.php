@@ -25,17 +25,40 @@ class Minime_Templates {
     }
 
     /**
-     * Override page template for minime pages to use blank template.
+     * Check if current request is in minime context.
+     * Returns true for:
+     * - Minime front page (by option minime_front_page_id)
+     * - Minime admin route (by query var minime_admin)
+     *
+     * @return bool True if in minime context.
+     */
+    private static function is_minime_context() {
+        $front_page_id = (int) get_option( 'minime_front_page_id', 0 );
+        
+        // Check if current page is minime front page
+        if ( $front_page_id > 0 && is_page( $front_page_id ) ) {
+            return true;
+        }
+        
+        // Check if current request is minime admin route
+        if ( get_query_var( 'minime_admin' ) ) {
+            return true;
+        }
+        
+        return false;
+    }
+
+    /**
+     * Override page template for minime front page.
      * 
-     * This ensures minime pages render without theme interference,
+     * This ensures minime front page renders without theme interference,
      * providing a clean fullscreen experience.
      */
     public static function override_page_template( $template ) {
         $front_page_id = (int) get_option( 'minime_front_page_id', 0 );
-        $admin_page_id = (int) get_option( 'minime_admin_page_id', 0 );
         
-        // Check if current page is a minime page (front or admin)
-        if ( is_page( $front_page_id ) || is_page( $admin_page_id ) ) {
+        // Only override for minime front page
+        if ( $front_page_id > 0 && is_page( $front_page_id ) ) {
             $plugin_template = plugin_dir_path( dirname( __FILE__ ) ) . 'templates/minime-blank.php';
             if ( file_exists( $plugin_template ) ) {
                 return $plugin_template;
@@ -46,16 +69,13 @@ class Minime_Templates {
     }
 
     /**
-     * Disable admin toolbar on minime pages.
+     * Disable admin toolbar on minime pages (front and admin route).
      * 
      * Provides a clean, distraction-free interface for the link-in-bio
      * and admin panel without WordPress admin bar overlay.
      */
     public static function disable_admin_bar() {
-        $front_page_id = (int) get_option( 'minime_front_page_id', 0 );
-        $admin_page_id = (int) get_option( 'minime_admin_page_id', 0 );
-        
-        if ( is_page( $front_page_id ) || is_page( $admin_page_id ) ) {
+        if ( self::is_minime_context() ) {
             show_admin_bar( false );
         }
     }
@@ -73,8 +93,8 @@ class Minime_Templates {
      * Only minime's own styles and essential WP styles are preserved.
      */
     public static function strip_theme_styles() {
-        // Only strip styles on minime pages (by slug)
-        if ( ! ( is_page( MINIME_FRONT_SLUG ) || is_page( MINIME_ADMIN_SLUG ) ) ) {
+        // Only strip styles in minime context
+        if ( ! self::is_minime_context() ) {
             return;
         }
 
@@ -112,347 +132,278 @@ class Minime_Templates {
      * Render the public card (Link in Bio) page.
      * Shortcode: [minime_link_in_bio]
      * 
-     * Enqueues frontend assets and renders the app container.
-     * Assets are enqueued here (not in template) to ensure they only
-     * load when the shortcode is actually rendered.
+     * Server-side rendered card with data from WordPress.
+     * This is a fallback until a frontend React app is deployed.
      */
     public static function render_card_shortcode() {
-        // Enqueue public CSS
-        wp_enqueue_style(
-            'minime-style',
-            minime_asset_url( 'assets/style.css' ),
-            array(),
-            MINIME_PLUGIN_VERSION
+        // Get settings
+        $settings = function_exists( 'minime_get_settings' ) ? minime_get_settings() : array();
+        
+        // Get basic info
+        $site_title = html_entity_decode( get_option( 'blogname' ), ENT_QUOTES, 'UTF-8' );
+        $site_tagline = html_entity_decode( get_option( 'blogdescription' ), ENT_QUOTES, 'UTF-8' );
+        $bio = isset( $settings['bio'] ) ? $settings['bio'] : '';
+        $site_icon_url = get_site_icon_url();
+        
+        // Get socials and buttons
+        $socials = isset( $settings['socials'] ) ? $settings['socials'] : array();
+        $buttons = isset( $settings['buttons'] ) ? $settings['buttons'] : array();
+        
+        // Get background settings
+        $bg = isset( $settings['background'] ) ? $settings['background'] : array();
+        $bg_type = isset( $bg['type'] ) ? $bg['type'] : 'solid';
+        $bg_color = isset( $bg['color'] ) ? $bg['color'] : '#f5f5f5';
+        $bg_image_id = isset( $bg['image_id'] ) ? (int) $bg['image_id'] : 0;
+        $bg_image_url = $bg_image_id ? wp_get_attachment_url( $bg_image_id ) : '';
+        $bg_gradient = isset( $bg['gradient'] ) ? $bg['gradient'] : array();
+        
+        // Card background
+        $card_bg = isset( $settings['card_background'] ) ? $settings['card_background'] : array();
+        $card_color = isset( $card_bg['color'] ) ? $card_bg['color'] : '#ffffff';
+        
+        // Build background CSS
+        $page_bg_css = '';
+        if ( $bg_type === 'gradient' && ! empty( $bg_gradient['colors'] ) ) {
+            $colors = implode( ', ', $bg_gradient['colors'] );
+            $angle = isset( $bg_gradient['angle'] ) ? (int) $bg_gradient['angle'] : 180;
+            $page_bg_css = "background: linear-gradient({$angle}deg, {$colors});";
+        } elseif ( $bg_type === 'image' && $bg_image_url ) {
+            $page_bg_css = "background: url('" . esc_url( $bg_image_url ) . "') center/cover no-repeat;";
+        } else {
+            $page_bg_css = "background-color: " . esc_attr( $bg_color ) . ";";
+        }
+        
+        // Social icon mapping
+        $social_icons = array(
+            'instagram' => 'fab fa-instagram',
+            'youtube' => 'fab fa-youtube',
+            'facebook' => 'fab fa-facebook',
+            'twitter' => 'fab fa-twitter',
+            'tiktok' => 'fab fa-tiktok',
+            'linkedin' => 'fab fa-linkedin',
+            'email' => 'fas fa-envelope',
+            'phone' => 'fas fa-phone',
+            'whatsapp' => 'fab fa-whatsapp',
+            'telegram' => 'fab fa-telegram',
+            'snapchat' => 'fab fa-snapchat',
+            'pinterest' => 'fab fa-pinterest',
+            'github' => 'fab fa-github',
+            'website' => 'fas fa-globe',
         );
-
-        // Enqueue public JS
-        wp_enqueue_script(
-            'minime-app',
-            minime_asset_url( 'assets/app.js' ),
-            array(),
-            MINIME_PLUGIN_VERSION,
-            true // Load in footer
-        );
-
-        // Pass configuration to JavaScript
-        $config = array(
-            'baseUrl'   => trailingslashit( home_url() ),
-            'frontSlug' => MINIME_FRONT_SLUG,
-            'adminSlug' => MINIME_ADMIN_SLUG,
-            'restRoot'  => esc_url_raw( get_rest_url( null, 'minime/v1' ) ),
-        );
-
-        wp_localize_script(
-            'minime-app',
-            'MINIME_CONFIG',
-            $config
-        );
-
-        // Return app mount point (JavaScript will render content here)
+        
         ob_start();
         ?>
-        <div id="app"></div>
+        <style>
+            .minime-card-wrapper {
+                min-height: 100vh;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                padding: 20px;
+                <?php echo $page_bg_css; ?>
+            }
+            .minime-card {
+                background: <?php echo esc_attr( $card_color ); ?>;
+                border-radius: 24px;
+                padding: 40px 30px;
+                max-width: 400px;
+                width: 100%;
+                text-align: center;
+                box-shadow: 0 10px 40px rgba(0,0,0,0.15);
+            }
+            .minime-avatar {
+                width: 100px;
+                height: 100px;
+                border-radius: 50%;
+                object-fit: cover;
+                margin-bottom: 16px;
+                border: 3px solid rgba(255,255,255,0.8);
+            }
+            .minime-title {
+                font-size: 24px;
+                font-weight: 700;
+                margin: 0 0 4px 0;
+                color: <?php echo self::get_contrast_color( $card_color ); ?>;
+            }
+            .minime-tagline {
+                font-size: 14px;
+                color: <?php echo self::get_contrast_color( $card_color ); ?>;
+                opacity: 0.7;
+                margin: 0 0 12px 0;
+            }
+            .minime-bio {
+                font-size: 14px;
+                color: <?php echo self::get_contrast_color( $card_color ); ?>;
+                opacity: 0.8;
+                margin: 0 0 24px 0;
+                line-height: 1.5;
+            }
+            .minime-socials {
+                display: flex;
+                justify-content: center;
+                gap: 16px;
+                margin-bottom: 24px;
+            }
+            .minime-social-link {
+                width: 40px;
+                height: 40px;
+                border-radius: 50%;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                background: rgba(0,0,0,0.1);
+                color: <?php echo self::get_contrast_color( $card_color ); ?>;
+                text-decoration: none;
+                transition: transform 0.2s, background 0.2s;
+            }
+            .minime-social-link:hover {
+                transform: scale(1.1);
+                background: rgba(0,0,0,0.2);
+            }
+            .minime-buttons {
+                display: flex;
+                flex-direction: column;
+                gap: 12px;
+            }
+            .minime-button {
+                display: block;
+                padding: 14px 24px;
+                background: <?php echo self::get_contrast_color( $card_color ); ?>;
+                color: <?php echo esc_attr( $card_color ); ?>;
+                text-decoration: none;
+                border-radius: 12px;
+                font-weight: 600;
+                transition: transform 0.2s, opacity 0.2s;
+            }
+            .minime-button:hover {
+                transform: translateY(-2px);
+                opacity: 0.9;
+            }
+        </style>
+        <div class="minime-card-wrapper">
+            <div class="minime-card">
+                <?php if ( $site_icon_url ) : ?>
+                    <img src="<?php echo esc_url( $site_icon_url ); ?>" alt="<?php echo esc_attr( $site_title ); ?>" class="minime-avatar">
+                <?php endif; ?>
+                
+                <h1 class="minime-title"><?php echo esc_html( $site_title ); ?></h1>
+                
+                <?php if ( $site_tagline ) : ?>
+                    <p class="minime-tagline"><?php echo esc_html( $site_tagline ); ?></p>
+                <?php endif; ?>
+                
+                <?php if ( $bio ) : ?>
+                    <p class="minime-bio"><?php echo wp_kses_post( $bio ); ?></p>
+                <?php endif; ?>
+                
+                <?php if ( ! empty( $socials ) ) : ?>
+                    <div class="minime-socials">
+                        <?php foreach ( $socials as $social ) : 
+                            $type = isset( $social['type'] ) ? $social['type'] : '';
+                            $value = isset( $social['value'] ) ? $social['value'] : '';
+                            $url = self::normalize_social_url( $type, $value );
+                            $icon = isset( $social_icons[ $type ] ) ? $social_icons[ $type ] : 'fas fa-link';
+                            if ( $url ) :
+                        ?>
+                            <a href="<?php echo esc_url( $url ); ?>" class="minime-social-link" target="_blank" rel="noopener">
+                                <i class="<?php echo esc_attr( $icon ); ?>"></i>
+                            </a>
+                        <?php endif; endforeach; ?>
+                    </div>
+                <?php endif; ?>
+                
+                <?php if ( ! empty( $buttons ) ) : ?>
+                    <div class="minime-buttons">
+                        <?php foreach ( $buttons as $button ) : 
+                            $label = isset( $button['label'] ) ? $button['label'] : '';
+                            $value = isset( $button['value'] ) ? $button['value'] : '';
+                            if ( $label && $value ) :
+                        ?>
+                            <a href="<?php echo esc_url( $value ); ?>" class="minime-button" target="_blank" rel="noopener">
+                                <?php echo esc_html( $label ); ?>
+                            </a>
+                        <?php endif; endforeach; ?>
+                    </div>
+                <?php endif; ?>
+            </div>
+        </div>
         <?php
         return ob_get_clean();
     }
+    
+    /**
+     * Get contrasting text color (black or white) based on background.
+     */
+    private static function get_contrast_color( $hex ) {
+        $hex = ltrim( $hex, '#' );
+        if ( strlen( $hex ) === 3 ) {
+            $hex = $hex[0] . $hex[0] . $hex[1] . $hex[1] . $hex[2] . $hex[2];
+        }
+        $r = hexdec( substr( $hex, 0, 2 ) );
+        $g = hexdec( substr( $hex, 2, 2 ) );
+        $b = hexdec( substr( $hex, 4, 2 ) );
+        $luminance = ( 0.299 * $r + 0.587 * $g + 0.114 * $b ) / 255;
+        return $luminance > 0.5 ? '#000000' : '#ffffff';
+    }
+    
+    /**
+     * Normalize social URLs.
+     */
+    private static function normalize_social_url( $type, $value ) {
+        $value = trim( $value );
+        if ( empty( $value ) ) return '';
+        
+        // Already a full URL
+        if ( preg_match( '~^https?://~i', $value ) ) {
+            return $value;
+        }
+        
+        switch ( strtolower( $type ) ) {
+            case 'instagram':
+                return 'https://instagram.com/' . ltrim( $value, '@/ ' );
+            case 'youtube':
+                return 'https://youtube.com/' . ltrim( $value, '@/ ' );
+            case 'facebook':
+                return 'https://facebook.com/' . ltrim( $value, '@/ ' );
+            case 'twitter':
+                return 'https://twitter.com/' . ltrim( $value, '@/ ' );
+            case 'tiktok':
+                return 'https://tiktok.com/@' . ltrim( $value, '@/ ' );
+            case 'linkedin':
+                return 'https://linkedin.com/in/' . ltrim( $value, '@/ ' );
+            case 'github':
+                return 'https://github.com/' . ltrim( $value, '@/ ' );
+            case 'email':
+                return 'mailto:' . $value;
+            case 'phone':
+                return 'tel:' . preg_replace( '/[^0-9+]/', '', $value );
+            case 'whatsapp':
+                return 'https://wa.me/' . preg_replace( '/[^0-9]/', '', $value );
+            default:
+                return $value;
+        }
+    }
 
     /**
-     * Render the admin panel SPA.
+     * Render the admin panel link.
      * Shortcode: [minime_admin_panel]
      * 
-     * Enqueues admin assets and renders the admin panel structure.
-     * Assets are enqueued here (not in template) to ensure they only
-     * load when the shortcode is actually rendered.
+     * Returns a button/link that directs to the admin panel served via rewrite rule.
+     * The actual admin panel is a Next.js app served at /{minime_admin_slug}/.
+     * Kept for backward compatibility.
      */
     public static function render_admin_shortcode() {
-        // Enqueue admin CSS
-        wp_enqueue_style(
-            'minime-admin-style',
-            minime_asset_url( 'assets/admin/admin.css' ),
-            array(),
-            MINIME_PLUGIN_VERSION
-        );
-
-        // Enqueue admin JS
-        wp_enqueue_script(
-            'minime-admin-app',
-            minime_asset_url( 'assets/admin/admin.js' ),
-            array(),
-            MINIME_PLUGIN_VERSION,
-            true // Load in footer
-        );
-
-        // Pass configuration to JavaScript
-        $config = array(
-            'baseUrl'   => trailingslashit( home_url() ),
-            'frontSlug' => MINIME_FRONT_SLUG,
-            'adminSlug' => MINIME_ADMIN_SLUG,
-            'restRoot'  => esc_url_raw( get_rest_url( null, 'minime/v1' ) ),
-        );
-
-        wp_localize_script(
-            'minime-admin-app',
-            'MINIME_CONFIG',
-            $config
-        );
+        // Build admin URL using dynamic slug
+        $admin_url = function_exists( 'minime_get_admin_url' ) 
+            ? minime_get_admin_url() 
+            : home_url( '/' . ( function_exists( 'minime_get_admin_slug' ) ? minime_get_admin_slug() : 'mm' ) . '/' );
 
         ob_start();
         ?>
-        <div class="shell">
-            <div class="card">
-
-                <!-- LOGIN VIEW -->
-                <div id="lb-login-view">
-                    <div class="headline">minime dashboard</div>
-                    <div class="title">Sign in to minime</div>
-
-                    <form id="lb-login-form" class="stack" autocomplete="on">
-                        <div class="field">
-                            <label for="lb-login-email">Email or username</label>
-                            <input id="lb-login-email" type="text" autocomplete="username" placeholder="you@example.com" required />
-                        </div>
-                        <div class="field">
-                            <label for="lb-login-password">Password</label>
-                            <input id="lb-login-password" type="password" autocomplete="current-password" placeholder="••••••••" required />
-                        </div>
-
-                        <div class="checkbox-row">
-                            <input id="lb-remember-me" type="checkbox" />
-                            <label for="lb-remember-me">Remember me on this browser</label>
-                        </div>
-
-                        <div class="login-help">
-                            <a href="#" id="lb-forgot-password">Forgot your password?</a>
-                        </div>
-
-                        <button type="submit" class="btn btn-primary">Log in</button>
-
-                        <div class="status" id="lb-login-status"></div>
-                    </form>
-                    
-                    <!-- Password Reset Form -->
-                    <form id="lb-reset-form" class="stack" style="display:none;">
-                        <div class="field">
-                            <label for="lb-reset-email">Email Address</label>
-                            <input id="lb-reset-email" type="email" autocomplete="email" placeholder="you@example.com" required />
-                        </div>
-
-                        <button type="submit" class="btn btn-primary">Send Reset Link</button>
-                        <button type="button" id="lb-back-to-login" class="btn btn-ghost">Back to Login</button>
-
-                        <div class="status" id="lb-reset-status"></div>
-                    </form>
-                </div>
-
-                <!-- SETTINGS VIEW -->
-                <div id="lb-settings-view" hidden>
-                    <div class="topbar">
-                        <div>
-                            <div class="headline">minime settings</div>
-                            <div class="title">Edit your public minime page</div>
-                        </div>
-                        <div class="stack-sm" style="align-items:flex-end;">
-                            <button id="lb-logout-btn" class="btn btn-ghost btn-small">Log out</button>
-                            <div class="status" id="lb-settings-status">Connected to WordPress.</div>
-                        </div>
-                    </div>
-
-                    <div class="row">
-                        <!-- LEFT COLUMN: PROFILE + BACKGROUND -->
-                        <div class="col stack">
-
-                            <div class="section">
-                                <div class="section-header">
-                                    <div class="section-title">Profile (from WordPress)</div>
-                                    <div class="pill">Identity</div>
-                                </div>
-
-                                <div class="field">
-                                    <label for="lb-site-title">Site Title (Name)</label>
-                                    <input id="lb-site-title" type="text" placeholder="Site title" />
-                                </div>
-
-                                <div class="field">
-                                    <label for="lb-site-tagline">Tagline (Subtitle)</label>
-                                    <input id="lb-site-tagline" type="text" placeholder="Short tagline" />
-                                </div>
-
-                                <div class="field">
-                                    <label for="lb-bio">Bio (Card description)</label>
-                                    <textarea id="lb-bio" placeholder="Write a short bio for the card"></textarea>
-                                </div>
-
-                                <div class="field">
-                                    <label for="lb-footer-text">Footer Branding Text</label>
-                                    <input id="lb-footer-text" type="text" placeholder="Powered by · Ayop · Headless WP · REST API" />
-                                    <div class="bg-hint">This text appears in the footer of your link-in-bio card.</div>
-                                </div>
-
-                                <div class="field">
-                                    <label>Avatar / Site Icon</label>
-                                    <div class="list-row">
-                                        <img id="lb-avatar-preview" class="avatar-preview" src="" alt="Avatar preview" />
-                                        <div class="stack-sm">
-                                            <input id="lb-avatar-file" type="file" accept="image/*" />
-                                            <div class="bg-hint">This image will be used as both the card avatar and the site favicon.</div>
-                                        </div>
-                                    </div>
-                                    <input id="lb-site-icon-id" type="hidden" />
-                                </div>
-                            </div>
-
-                            <div class="section">
-                                <div class="section-header">
-                                    <div class="section-title">Background</div>
-                                    <div class="pill">Visuals</div>
-                                </div>
-
-                                <div class="field">
-                                    <label for="lb-bg-type">Background Type</label>
-                                    <select id="lb-bg-type">
-                                        <option value="image">Image</option>
-                                        <option value="color">Solid Color</option>
-                                        <option value="gradient">Gradient</option>
-                                        <option value="custom">Custom HTML / CSS / JS</option>
-                                    </select>
-                                </div>
-
-                                <!-- IMAGE -->
-                                <div id="lb-bg-image-block" class="stack-sm">
-                                    <div class="field">
-                                        <label>Background Image</label>
-                                        <div class="list-row">
-                                            <input id="lb-bg-image-file" type="file" accept="image/*" />
-                                            <button type="button" id="lb-bg-image-upload-btn" class="btn btn-small">Upload</button>
-                                        </div>
-                                        <input id="lb-bg-image-id" type="hidden" />
-                                        <div class="bg-hint">Recommended large, high-quality image.</div>
-                                    </div>
-                                </div>
-
-                                <!-- COLOR -->
-                                <div id="lb-bg-color-block" class="stack-sm" hidden>
-                                    <div class="field">
-                                        <label for="lb-bg-color">Background Color</label>
-                                        <input id="lb-bg-color" type="color" value="#000000" />
-                                    </div>
-                                </div>
-
-                                <!-- GRADIENT -->
-                                <div id="lb-bg-gradient-block" class="stack-sm" hidden>
-                                    <div class="field">
-                                        <label>Gradient Colors (2–3 colors)</label>
-                                        <div class="list-row">
-                                            <input id="lb-bg-grad-color-1" type="color" value="#111827" />
-                                            <input id="lb-bg-grad-color-2" type="color" value="#1f2937" />
-                                            <input id="lb-bg-grad-color-3" type="color" />
-                                        </div>
-                                    </div>
-                                    <div class="field">
-                                        <label for="lb-bg-gradient-angle">Gradient Angle (0–360)</label>
-                                        <input id="lb-bg-gradient-angle" type="number" min="0" max="360" step="1" value="180" />
-                                    </div>
-                                </div>
-
-                                <!-- CUSTOM CODE -->
-                                <div id="lb-bg-custom-block" class="stack-sm" hidden>
-                                    <div class="field">
-                                        <label for="lb-bg-custom-code">Custom HTML / CSS / JS</label>
-                                        <textarea id="lb-bg-custom-code" placeholder="Paste custom HTML/CSS/JS to render the background. PHP is not allowed."></textarea>
-                                    </div>
-                                </div>
-                            </div>
-
-                            <div class="section">
-                                <div class="section-header">
-                                    <div class="section-title">Card Background</div>
-                                    <div class="pill">Visuals</div>
-                                </div>
-
-                                <div class="field">
-                                    <label for="lb-card-bg-type">Card Background Type</label>
-                                    <select id="lb-card-bg-type">
-                                        <option value="solid">Solid Color</option>
-                                        <option value="gradient">Gradient</option>
-                                    </select>
-                                </div>
-
-                                <!-- SOLID COLOR -->
-                                <div id="lb-card-bg-solid-block" class="stack-sm">
-                                    <div class="field">
-                                        <label for="lb-card-bg-color">Card Background Color</label>
-                                        <input id="lb-card-bg-color" type="color" value="#ffffff" />
-                                    </div>
-                                </div>
-
-                                <!-- GRADIENT -->
-                                <div id="lb-card-bg-gradient-block" class="stack-sm" hidden>
-                                    <div class="field">
-                                        <label>Gradient Colors (2–3 colors)</label>
-                                        <div class="list-row">
-                                            <input id="lb-card-bg-grad-color-1" type="color" value="#ffffff" />
-                                            <input id="lb-card-bg-grad-color-2" type="color" value="#eeeeee" />
-                                            <input id="lb-card-bg-grad-color-3" type="color" />
-                                        </div>
-                                    </div>
-                                    <div class="field">
-                                        <label for="lb-card-bg-gradient-angle">Gradient Angle (0–360)</label>
-                                        <input id="lb-card-bg-gradient-angle" type="number" min="0" max="360" step="1" value="135" />
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-
-                        <!-- RIGHT COLUMN: SOCIALS + BUTTONS + SAVE -->
-                        <div class="col stack">
-
-                            <div class="section">
-                                <div class="section-header">
-                                    <div class="section-title">Social Links</div>
-                                    <div class="pill">Channels</div>
-                                </div>
-
-                                <div id="lb-socials-list" class="list"></div>
-
-                                <button type="button" id="lb-add-social" class="btn btn-small btn-ghost">+ Add social link</button>
-                            </div>
-
-                            <div class="section">
-                                <div class="section-header">
-                                    <div class="section-title">Buttons</div>
-                                    <div class="pill">Call to Action</div>
-                                </div>
-
-                                <div id="lb-buttons-list" class="list"></div>
-
-                                <button type="button" id="lb-add-button" class="btn btn-small btn-ghost">+ Add button</button>
-                            </div>
-
-                            <div class="section">
-                                <div class="section-header">
-                                    <div class="section-title">Save</div>
-                                </div>
-
-                                <p class="bg-hint" style="margin-bottom:12px;">
-                                    One single <strong>Save</strong> button to apply all changes:
-                                    profile, background, socials and buttons.  
-                                    Changes will update WordPress Site Title, Tagline and Site Icon automatically.
-                                </p>
-
-                                <label class="mm-toggle" style="display:flex;align-items:center;gap:8px;margin-bottom:16px;cursor:pointer;font-size:12px;">
-                                    <input type="checkbox" id="mm-keep-homepage" style="cursor:pointer;">
-                                    <span style="user-select:none;">Keep my current homepage (don't set minime as front page)</span>
-                                </label>
-
-                                <button type="button" id="lb-save-all" class="btn btn-primary" style="width:100%;margin-bottom:8px;">Save all changes</button>
-                                <button type="button" id="mm-view-public" class="btn btn-secondary" style="width:100%;" disabled>View my minime</button>
-                            </div>
-
-                        </div>
-                    </div>
-                </div>
-
-            </div>
+        <div style="text-align: center; padding: 40px 20px;">
+            <a href="<?php echo esc_url( $admin_url ); ?>" class="btn btn-primary" style="display: inline-block; padding: 12px 24px; background: #0073aa; color: white; text-decoration: none; border-radius: 4px;">
+                Go to minime Admin
+            </a>
         </div>
         <?php
         return ob_get_clean();

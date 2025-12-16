@@ -8,6 +8,16 @@
  * Domain Path: /languages
  *
  * @package minime
+ *
+ * ARCHITECTURE CHANGES:
+ * - Added MINIME_PLUGIN_FILE constant for consistent file reference
+ * - Removed hardcoded MINIME_ADMIN_SLUG; now uses dynamic minime_get_admin_slug()
+ * - Introduced minime_get_admin_slug() helper to read option 'minime_admin_slug' (default: 'mm')
+ * - Updated minime_get_admin_url() to use dynamic admin slug
+ * - Removed unused minime_init(); init now wired directly on hooks
+ * - Activation no longer creates WordPress /admin page (no [minime_admin_panel] shortcode)
+ * - Activation now stores default option 'minime_admin_slug' = 'mm' on first run
+ * - Simplified card_background defaults (removed gradient, keeps only color)
  */
 
 if ( ! defined( 'ABSPATH' ) ) {
@@ -18,16 +28,16 @@ if ( ! defined( 'ABSPATH' ) ) {
  * CONSTANTS & CONFIGURATION
  * ========================================================================= */
 
+if ( ! defined( 'MINIME_PLUGIN_FILE' ) ) {
+    define( 'MINIME_PLUGIN_FILE', __FILE__ );
+}
+
 if ( ! defined( 'MINIME_PLUGIN_VERSION' ) ) {
     define( 'MINIME_PLUGIN_VERSION', '1.0.0' );
 }
 
 if ( ! defined( 'MINIME_FRONT_SLUG' ) ) {
     define( 'MINIME_FRONT_SLUG', 'minime' );
-}
-
-if ( ! defined( 'MINIME_ADMIN_SLUG' ) ) {
-    define( 'MINIME_ADMIN_SLUG', 'admin' );
 }
 
 if ( ! defined( 'MINIME_OPTION_KEY' ) ) {
@@ -51,25 +61,55 @@ require_once plugin_dir_path( __FILE__ ) . 'includes/class-minime-admin.php';
  * Load plugin text domain for translations.
  */
 function minime_load_textdomain() {
-    load_plugin_textdomain( 'minime', false, dirname( plugin_basename( __FILE__ ) ) . '/languages' );
+    load_plugin_textdomain( 'minime', false, dirname( plugin_basename( MINIME_PLUGIN_FILE ) ) . '/languages' );
 }
 add_action( 'plugins_loaded', 'minime_load_textdomain' );
 
 /**
- * Initialize plugin components.
+ * Initialize plugin components on rest_api_init.
  */
-function minime_init() {
-    Minime_REST::init();
-    Minime_Templates::init();
-    Minime_Emails::init();
-    Minime_Admin::init();
-}
 add_action( 'rest_api_init', array( 'Minime_REST', 'init' ) );
+
+/**
+ * Initialize plugin components on init.
+ */
 add_action( 'init', function() {
     Minime_Templates::init();
     Minime_Emails::init();
     Minime_Admin::init();
 } );
+
+/**
+ * Auto-flush rewrite rules if minime admin rules are missing.
+ * This handles cases where activation hook didn't properly register rules.
+ */
+add_action( 'wp_loaded', function() {
+    // Only check on non-AJAX, non-REST requests from admin users
+    if ( is_admin() || defined( 'DOING_AJAX' ) || defined( 'REST_REQUEST' ) ) {
+        return;
+    }
+    
+    global $wp_rewrite;
+    
+    // Check if minime_admin rule exists
+    $has_minime_rule = false;
+    if ( is_array( $wp_rewrite->rules ) && ! empty( $wp_rewrite->rules ) ) {
+        foreach ( $wp_rewrite->rules as $rule => $rewrite ) {
+            if ( strpos( $rewrite, 'minime_admin' ) !== false ) {
+                $has_minime_rule = true;
+                break;
+            }
+        }
+    }
+    
+    // If rule missing, flush immediately
+    if ( ! $has_minime_rule ) {
+        // Register the rule
+        Minime_Admin::register_rewrite_rules();
+        // Flush the database
+        flush_rewrite_rules( false );
+    }
+}, 99 );
 
 /* =========================================================================
  * UTILITY FUNCTIONS
@@ -82,16 +122,29 @@ add_action( 'init', function() {
  * @return string Full URL to asset.
  */
 function minime_asset_url( $path = '' ) {
-    return plugins_url( ltrim( $path, '/' ), __FILE__ );
+    return plugins_url( ltrim( $path, '/' ), MINIME_PLUGIN_FILE );
 }
 
 /**
- * Get the minime admin page URL.
+ * Get the admin slug from options (per-site configuration).
+ * Reads option 'minime_admin_slug', defaults to 'mm'.
+ * Sanitizes to lowercase alphanumeric + dashes.
+ *
+ * @return string Sanitized admin slug.
+ */
+function minime_get_admin_slug() {
+    $slug = get_option( 'minime_admin_slug', 'mm' );
+    $slug = sanitize_title( $slug );
+    return ! empty( $slug ) ? $slug : 'mm';
+}
+
+/**
+ * Get the minime admin page URL based on dynamic admin slug.
  *
  * @return string Admin page URL.
  */
 function minime_get_admin_url() {
-    return home_url( '/admin' );
+    return home_url( '/' . minime_get_admin_slug() );
 }
 
 /* =========================================================================
@@ -161,12 +214,8 @@ function minime_get_settings() {
     // Card Background
     if ( ! isset( $settings['card_background'] ) || ! is_array( $settings['card_background'] ) ) {
         $settings['card_background'] = array(
-            'type'     => 'solid',
-            'color'    => '#ffffff',
-            'gradient' => array(
-                'colors' => array( '#ffffff', '#eeeeee' ),
-                'angle'  => 135,
-            ),
+            'type'  => 'solid',
+            'color' => '#ffffff',
         );
     }
 
@@ -314,17 +363,18 @@ function minime_activate_plugin() {
     );
     update_option( 'minime_front_page_id', $front_page_id );
 
-    // Create /admin page for admin panel
-    $admin_page_id = minime_ensure_page(
-        'Admin',
-        MINIME_ADMIN_SLUG,
-        '[minime_admin_panel]'
-    );
-    update_option( 'minime_admin_page_id', $admin_page_id );
-
     // Set minime page as front page by default
     $settings = minime_get_settings();
     minime_maybe_set_front_page( $front_page_id, $settings );
+
+    // Store default admin slug if not already set
+    if ( ! get_option( 'minime_admin_slug' ) ) {
+        update_option( 'minime_admin_slug', 'mm' );
+    }
+
+    // Register rewrite rules before flushing
+    // This ensures the rules are written to the WordPress rewrite database
+    Minime_Admin::register_rewrite_rules();
 
     // Flush rewrite rules
     flush_rewrite_rules();
@@ -378,3 +428,5 @@ function minime_ensure_page( $title, $slug, $shortcode_content ) {
 
     return $page_id;
 }
+
+

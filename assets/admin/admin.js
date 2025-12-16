@@ -13,6 +13,7 @@
   let settings = {
     public_url: ''
   };
+  let hasUnsavedChanges = false;
 
   // DOM refs
   const loginView = document.getElementById("lb-login-view");
@@ -77,6 +78,13 @@
   const addButtonBtn = document.getElementById("lb-add-button");
   const saveAllBtn = document.getElementById("lb-save-all");
 
+  // Prevent initial flash: hide both views until routing decision is made
+  if (loginView) loginView.hidden = true;
+  if (settingsView) {
+    settingsView.hidden = true;
+    settingsView.style.visibility = "hidden"; // keep it from flashing during layout moves
+  }
+
   /* ---------------------------------------------------------------------- */
   /*  Helpers
   /* ---------------------------------------------------------------------- */
@@ -89,6 +97,7 @@
   function showSettings() {
     if (loginView) loginView.hidden = true;
     if (settingsView) settingsView.hidden = false;
+    // keep visibility hidden until layout is applied
   }
 
   function setLoginStatus(msg, isError) {
@@ -183,25 +192,104 @@
     return res.text();
   }
 
-  async function uploadFile(file) {
+  async function uploadFile(file, maxRetries = 3) {
     if (!file) return null;
     if (!authToken) {
       alert("You must be logged in to upload files.");
       return null;
     }
 
-    const formData = new FormData();
-    formData.append("file", file);
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        const formData = new FormData();
+        formData.append("file", file);
 
-    const data = await apiFetch("/upload-image", {
-      method: "POST",
-      body: formData
-    });
+        const data = await apiFetch("/upload-image", {
+          method: "POST",
+          body: formData
+        });
 
-    if (!data || !data.ok) {
-      throw new Error("Upload failed");
+        if (!data || !data.ok) {
+          throw new Error("Upload failed");
+        }
+        return data;
+      } catch (err) {
+        console.error(`[Upload] Attempt ${attempt}/${maxRetries} failed:`, err);
+        if (attempt === maxRetries) {
+          throw err;
+        }
+        // Wait before retry (exponential backoff)
+        await new Promise(resolve => setTimeout(resolve, 1000 * attempt));
+      }
     }
-    return data;
+  }
+
+  function isValidUrl(string) {
+    try {
+      new URL(string);
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  function isValidEmail(string) {
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    return emailRegex.test(string);
+  }
+
+  function validateSettings() {
+    const errors = [];
+    
+    if (!siteTitleInput.value.trim()) {
+      errors.push('Site title is required');
+    }
+    
+    // Validate URLs in buttons
+    if (buttonsList) {
+      buttonsList.querySelectorAll('.lb-button-row').forEach((row, i) => {
+        const label = row.querySelector('.lb-button-label').value.trim();
+        const value = row.querySelector('.lb-button-value').value.trim();
+        
+        if (label && !value) {
+          errors.push(`Button "${label}" is missing a URL or value`);
+        }
+        
+        if (value && !label) {
+          errors.push(`Button ${i + 1} is missing a label`);
+        }
+        
+        if (value && !value.startsWith('http') && !value.startsWith('mailto:') && 
+            !value.startsWith('tel:') && !value.startsWith('whatsapp:') && 
+            !isValidUrl('https://' + value) && !isValidEmail(value)) {
+          errors.push(`Button "${label || (i + 1)}" has an invalid URL format`);
+        }
+      });
+    }
+    
+    // Validate social links
+    if (socialsList) {
+      socialsList.querySelectorAll('.lb-social-row').forEach((row, i) => {
+        const type = row.querySelector('.lb-social-type').value;
+        const value = row.querySelector('.lb-social-value').value.trim();
+        
+        if (type && !value) {
+          errors.push(`Social link (${type}) is missing a value`);
+        }
+        
+        if (value && !type) {
+          errors.push(`Social link ${i + 1} is missing a type`);
+        }
+      });
+    }
+    
+    return errors;
+  }
+
+  function showValidationErrors(errors) {
+    const errorMsg = 'Please fix the following errors:\n\n• ' + errors.join('\n• ');
+    alert(errorMsg);
+    setSettingsStatus('Validation failed. Please check your inputs.', true);
   }
 
   function updateBackgroundBlocks() {
@@ -317,6 +405,306 @@
     updateCardBgGradientPreview(0);
     updateCardBgGradientPreview(1);
     updateCardBgGradientPreview(2);
+  }
+
+  /* ---------------------------------------------------------------------- */
+  /*  NOTION/iOS LAYOUT REORGANIZATION
+  /* ---------------------------------------------------------------------- */
+
+  function applyNotionIosLayout() {
+    try {
+      // Wait for DOM to be fully rendered with settings view visible
+      const settingsView = document.getElementById('lb-settings-view');
+      if (!settingsView || settingsView.hidden) {
+        console.warn('[minime Layout] Settings view not ready yet');
+        return;
+      }
+
+      // Helper to find sections by their title text
+      function findSectionByTitle(titleText) {
+        const sections = settingsView.querySelectorAll('.section');
+        for (const section of sections) {
+          const title = section.querySelector('.section-title');
+          if (title && title.textContent.trim().toLowerCase().includes(titleText.toLowerCase())) {
+            return section;
+          }
+        }
+        return null;
+      }
+
+      // Helper to create a new section
+      function createSection(title, pillText) {
+        const section = document.createElement('div');
+        section.className = 'section';
+        
+        const header = document.createElement('div');
+        header.className = 'section-header';
+        
+        const titleDiv = document.createElement('div');
+        titleDiv.className = 'section-title';
+        titleDiv.textContent = title;
+        
+        header.appendChild(titleDiv);
+        
+        if (pillText) {
+          const pill = document.createElement('div');
+          pill.className = 'pill';
+          pill.textContent = pillText;
+          header.appendChild(pill);
+        }
+        
+        section.appendChild(header);
+        return section;
+      }
+
+      // Find all existing sections
+      const profileSection = findSectionByTitle('profile');
+      const backgroundSection = findSectionByTitle('background');
+      const cardBgSection = findSectionByTitle('card background');
+      const socialsSection = findSectionByTitle('social');
+      const buttonsSection = findSectionByTitle('buttons');
+      const saveSection = findSectionByTitle('save');
+
+      // Find the existing .row container and replace it with a stack container
+      const existingRow = settingsView.querySelector('.row');
+      if (!existingRow) {
+        console.warn('[minime Layout] Could not find .row container');
+        return;
+      }
+
+      // Create a stack container to hold multiple rows
+      const stackContainer = document.createElement('div');
+      stackContainer.className = 'stack';
+
+      /* ROW 1: Identity (Title/Tagline/Bio) + Avatar */
+      const row1 = document.createElement('div');
+      row1.className = 'row';
+
+      // Left column: Site Title, Tagline, Bio
+      const row1Left = document.createElement('div');
+      row1Left.className = 'col stack';
+      
+      const identitySection = createSection('identity', 'profile');
+      
+      if (profileSection) {
+        const titleField = profileSection.querySelector('#lb-site-title')?.closest('.field');
+        const taglineField = profileSection.querySelector('#lb-site-tagline')?.closest('.field');
+        const bioField = profileSection.querySelector('#lb-bio')?.closest('.field');
+        
+        if (titleField) {
+          identitySection.appendChild(titleField);
+          const titleInput = titleField.querySelector('#lb-site-title');
+          if (titleInput) titleInput.placeholder = 'site title';
+        }
+        
+        if (taglineField) {
+          identitySection.appendChild(taglineField);
+          const taglineInput = taglineField.querySelector('#lb-site-tagline');
+          if (taglineInput) taglineInput.placeholder = 'short tagline';
+        }
+        
+        if (bioField) {
+          identitySection.appendChild(bioField);
+          const bioTextarea = bioField.querySelector('#lb-bio');
+          if (bioTextarea) bioTextarea.placeholder = 'write a short bio for the card';
+        }
+      }
+      
+      row1Left.appendChild(identitySection);
+
+      // Right column: Avatar
+      const row1Right = document.createElement('div');
+      row1Right.className = 'col stack';
+      
+      const avatarSection = createSection('avatar / site icon', 'identity');
+      
+      if (profileSection) {
+        const avatarField = profileSection.querySelector('#lb-avatar-preview')?.closest('.field');
+        if (avatarField) avatarSection.appendChild(avatarField);
+      }
+      
+      row1Right.appendChild(avatarSection);
+
+      row1.appendChild(row1Left);
+      row1.appendChild(row1Right);
+      stackContainer.appendChild(row1);
+
+      /* ROW 2: Social Links + Buttons */
+      const row2 = document.createElement('div');
+      row2.className = 'row';
+
+      // Left: Social Links
+      const row2Left = document.createElement('div');
+      row2Left.className = 'col stack';
+      if (socialsSection) {
+        row2Left.appendChild(socialsSection);
+      }
+
+      // Right: Buttons
+      const row2Right = document.createElement('div');
+      row2Right.className = 'col stack';
+      if (buttonsSection) {
+        row2Right.appendChild(buttonsSection);
+      }
+
+      row2.appendChild(row2Left);
+      row2.appendChild(row2Right);
+      stackContainer.appendChild(row2);
+
+      /* ROW 3: Card Background + Background */
+      const row3 = document.createElement('div');
+      row3.className = 'row';
+
+      // Left: Card Background
+      const row3Left = document.createElement('div');
+      row3Left.className = 'col stack';
+      if (cardBgSection) {
+        row3Left.appendChild(cardBgSection);
+      }
+
+      // Right: Background
+      const row3Right = document.createElement('div');
+      row3Right.className = 'col stack';
+      if (backgroundSection) {
+        row3Right.appendChild(backgroundSection);
+      }
+
+      row3.appendChild(row3Left);
+      row3.appendChild(row3Right);
+      stackContainer.appendChild(row3);
+
+      /* ROW 4: Branding (Full Width) */
+      const row4 = document.createElement('div');
+      row4.className = 'row';
+
+      const row4Col = document.createElement('div');
+      row4Col.className = 'col stack';
+      row4Col.style.width = '100%';
+
+      // Footer branding text section with checkbox
+      const footerSection = createSection('branding', 'footer');
+      
+      // Find footer text field in save section
+      const footerField = saveSection ? saveSection.querySelector('#lb-footer-text')?.closest('.field') : null;
+      
+      // Create checkbox for branding control (checked by default)
+      const brandingCheckboxLabel = document.createElement('label');
+      brandingCheckboxLabel.className = 'checkbox-row';
+      brandingCheckboxLabel.style.marginBottom = '16px';
+      
+      const brandingCheckbox = document.createElement('input');
+      brandingCheckbox.type = 'checkbox';
+      brandingCheckbox.id = 'mm-show-branding';
+      brandingCheckbox.checked = true;
+      
+      const brandingCheckboxText = document.createElement('span');
+      brandingCheckboxText.textContent = 'show footer branding text';
+      
+      brandingCheckboxLabel.appendChild(brandingCheckbox);
+      brandingCheckboxLabel.appendChild(brandingCheckboxText);
+      
+      footerSection.appendChild(brandingCheckboxLabel);
+      
+      // Add footer text field (hidden if checkbox unchecked)
+      if (footerField) {
+        footerField.style.display = brandingCheckbox.checked ? 'block' : 'none';
+        footerSection.appendChild(footerField);
+        
+        // Toggle footer text field visibility when checkbox changes
+        brandingCheckbox.addEventListener('change', () => {
+          footerField.style.display = brandingCheckbox.checked ? 'block' : 'none';
+          markAsUnsaved();
+        });
+      }
+      
+      row4Col.appendChild(footerSection);
+      row4.appendChild(row4Col);
+      stackContainer.appendChild(row4);
+
+      /* ROW 5: Save (Full Width) */
+      const row5 = document.createElement('div');
+      row5.className = 'row';
+
+      const row5Col = document.createElement('div');
+      row5Col.className = 'col stack';
+      row5Col.style.width = '100%';
+
+      if (saveSection) {
+        // Find the buttons inside the save section
+        const saveButtons = saveSection.querySelectorAll('.btn, .btn-primary');
+        
+        if (saveButtons.length > 0) {
+          // Create a flex container for buttons
+          const buttonRow = document.createElement('div');
+          buttonRow.className = 'save-buttons-row';
+          buttonRow.style.display = 'flex';
+          buttonRow.style.gap = '12px';
+          buttonRow.style.alignItems = 'center';
+          buttonRow.style.flexWrap = 'wrap';
+          
+          // Move all buttons to the button row
+          saveButtons.forEach(btn => {
+            btn.style.flex = '1';
+            btn.style.minWidth = '200px';
+            buttonRow.appendChild(btn);
+          });
+          
+          // Clear the save section content and add the button row
+          const sectionContent = saveSection.querySelector('.section-header');
+          if (sectionContent && sectionContent.nextSibling) {
+            // Remove all content after header
+            while (sectionContent.nextSibling) {
+              sectionContent.nextSibling.remove();
+            }
+          }
+          
+          saveSection.appendChild(buttonRow);
+        }
+        
+        row5Col.appendChild(saveSection);
+      }
+
+      row5.appendChild(row5Col);
+      stackContainer.appendChild(row5);
+
+      // Replace the existing row with the new stack container
+      existingRow.parentNode.replaceChild(stackContainer, existingRow);
+
+      // Remove empty profile section if it exists
+      if (profileSection && profileSection.parentNode) {
+        profileSection.remove();
+      }
+
+      // Reveal settings view now that layout is applied
+      if (settingsView) {
+        settingsView.style.visibility = "visible";
+      }
+
+      console.log('[minime Layout] Successfully applied Notion/iOS layout');
+    } catch (err) {
+      console.error('[minime Layout] Failed to reorganize layout:', err);
+      // Reveal anyway on error so UI isn't stuck hidden
+      const sv = document.getElementById('lb-settings-view');
+      if (sv) {
+        sv.style.visibility = "visible";
+      }
+    }
+  }
+
+  function safelyApplyLayout() {
+    // Strategy 1: Use requestAnimationFrame for smooth rendering
+    if (typeof requestAnimationFrame !== 'undefined') {
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          applyNotionIosLayout();
+        });
+      });
+    } else {
+      // Fallback: Use setTimeout
+      setTimeout(() => {
+        applyNotionIosLayout();
+      }, 100);
+    }
   }
 
   function createSocialRow(row = { type: "", value: "" }) {
@@ -439,6 +827,17 @@
         avatarPreview.src =
           "data:image/svg+xml,%3Csvg width='80' height='80' viewBox='0 0 80 80' xmlns='http://www.w3.org/2000/svg'%3E%3Crect width='80' height='80' rx='40' fill='%23111827'/%3E%3Cpath d='M40 20a12 12 0 1 1 0 24 12 12 0 0 1 0-24Zm0 28c-12.15 0-22 6.27-22 14v2h44v-2c0-7.73-9.85-14-22-14Z' fill='%239ca3af'/%3E%3C/svg%3E";
       }
+      
+      // Branding checkbox (default checked, hide footer field if unchecked)
+      const brandingCheckbox = document.getElementById('mm-show-branding');
+      if (brandingCheckbox) {
+        const showBranding = data.show_branding !== undefined ? data.show_branding : true;
+        brandingCheckbox.checked = showBranding;
+        const footerField = footerTextInput?.closest('.field');
+        if (footerField) {
+          footerField.style.display = showBranding ? 'block' : 'none';
+        }
+      }
 
       // Background
       const bg = data.background || {};
@@ -460,6 +859,12 @@
       
       // Update gradient previews
       updateAllGradientPreviews();
+      updateGradientLivePreview();
+
+      // Show background image preview if available
+      if (bg.image_url) {
+        showBackgroundImagePreview(bg.image_url);
+      }
 
       // Decode custom_code from Base64
       try {
@@ -492,6 +897,7 @@
       }
       
       updateAllCardBgGradientPreviews();
+      updateCardGradientLivePreview();
       updateCardBackgroundBlocks();
 
       // Socials + Buttons
@@ -510,7 +916,8 @@
       // Setup "View my minime" button
       updateViewPublicButton();
 
-      setSettingsStatus("Connected to WordPress.");
+      // Apply Notion/iOS layout reorganization (safely after DOM is fully mounted)
+      safelyApplyLayout();
     } catch (err) {
       console.error(err);
       setSettingsStatus("Failed to load data. Check console for details.", true);
@@ -527,7 +934,21 @@
       return;
     }
 
+    // Validate form
+    const validationErrors = validateSettings();
+    if (validationErrors.length > 0) {
+      showValidationErrors(validationErrors);
+      return;
+    }
+
     try {
+      // Add loading state
+      if (saveAllBtn) {
+        saveAllBtn.disabled = true;
+        saveAllBtn.classList.add('loading');
+        saveAllBtn.textContent = 'Saving...';
+      }
+      
       setSettingsStatus("Saving…");
 
       const site_title = siteTitleInput.value.trim();
@@ -603,9 +1024,9 @@
         });
       }
 
-      // Homepage control
-      const keepHomepageCheckbox = document.getElementById('mm-keep-homepage');
-      const keep_homepage = keepHomepageCheckbox ? keepHomepageCheckbox.checked : false;
+      // Get branding checkbox state
+      const brandingCheckbox = document.getElementById('mm-show-branding');
+      const show_branding = brandingCheckbox ? brandingCheckbox.checked : true;
 
       const branding_footer_text = footerTextInput.value.trim();
 
@@ -618,7 +1039,7 @@
         card_background: cardBg,
         socials,
         buttons,
-        keep_homepage,
+        show_branding,
         branding_footer_text,
       };
 
@@ -630,10 +1051,20 @@
       console.log("[minime Admin] Save result:", res);
       setSettingsStatus("Saved successfully.");
       alert("All changes saved successfully.");
+      
+      // Clear unsaved changes flag
+      hasUnsavedChanges = false;
     } catch (err) {
       console.error(err);
       setSettingsStatus("Error: Save failed. Check console for details.", true);
       alert("Save failed. See console for details.");
+    } finally {
+      // Remove loading state
+      if (saveAllBtn) {
+        saveAllBtn.disabled = false;
+        saveAllBtn.classList.remove('loading');
+        saveAllBtn.textContent = 'Save all changes';
+      }
     }
   }
 
@@ -965,10 +1396,170 @@
   }
 
   /* ---------------------------------------------------------------------- */
+  /*  MARK AS UNSAVED CHANGES
+  /* ---------------------------------------------------------------------- */
+
+  function markAsUnsaved() {
+    hasUnsavedChanges = true;
+  }
+
+  function setupUnsavedChangesTracking() {
+    // Track changes on all inputs
+    const inputs = [
+      siteTitleInput, siteTaglineInput, bioTextarea, footerTextInput,
+      bgTypeSelect, bgColorInput, bgGradColor1, bgGradColor2, bgGradColor3,
+      bgGradientAngleInput, bgCustomCodeTextarea,
+      cardBgTypeSelect, cardBgColorInput, cardBgGradColor1, cardBgGradColor2,
+      cardBgGradColor3, cardBgGradientAngleInput
+    ].filter(el => el);
+
+    inputs.forEach(input => {
+      if (input) {
+        input.addEventListener('input', markAsUnsaved);
+        input.addEventListener('change', markAsUnsaved);
+      }
+    });
+
+    // Track file uploads
+    if (avatarFileInput) avatarFileInput.addEventListener('change', markAsUnsaved);
+    if (bgImageFileInput) bgImageFileInput.addEventListener('change', markAsUnsaved);
+
+    // Track social/button additions/removals
+    if (socialsList) {
+      const observer = new MutationObserver(markAsUnsaved);
+      observer.observe(socialsList, { childList: true, subtree: true });
+    }
+    if (buttonsList) {
+      const observer = new MutationObserver(markAsUnsaved);
+      observer.observe(buttonsList, { childList: true, subtree: true });
+    }
+
+    // Warn before leaving with unsaved changes
+    window.addEventListener('beforeunload', (e) => {
+      if (hasUnsavedChanges) {
+        e.preventDefault();
+        e.returnValue = 'You have unsaved changes. Are you sure you want to leave?';
+        return e.returnValue;
+      }
+    });
+  }
+
+  /* ---------------------------------------------------------------------- */
+  /*  KEYBOARD SHORTCUTS
+  /* ---------------------------------------------------------------------- */
+
+  function setupKeyboardShortcuts() {
+    document.addEventListener('keydown', (e) => {
+      // Ctrl+S or Cmd+S to save
+      if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+        e.preventDefault();
+        if (!loginView.hidden) return; // Only work in settings view
+        handleSaveAll();
+      }
+    });
+  }
+
+  /* ---------------------------------------------------------------------- */
+  /*  IMAGE PREVIEWS
+  /* ---------------------------------------------------------------------- */
+
+  function showBackgroundImagePreview(imageUrl) {
+    // Remove existing preview
+    const existingPreview = bgImageBlock.querySelector('.bg-image-preview');
+    if (existingPreview) existingPreview.remove();
+
+    if (imageUrl) {
+      const preview = document.createElement('div');
+      preview.className = 'bg-image-preview';
+      preview.style.cssText = 'margin-top:12px;';
+      preview.innerHTML = `
+        <img src="${imageUrl}" alt="Background preview" 
+             style="max-width:100%; height:auto; border-radius:8px; border:1px solid var(--border-muted); display:block;" />
+      `;
+      bgImageBlock.appendChild(preview);
+    }
+  }
+
+  function createGradientPreview() {
+    // Check if gradient preview already exists
+    let gradientPreview = bgGradientBlock.querySelector('.gradient-live-preview');
+    
+    if (!gradientPreview) {
+      gradientPreview = document.createElement('div');
+      gradientPreview.className = 'gradient-live-preview';
+      gradientPreview.style.cssText = `
+        width: 100%;
+        height: 60px;
+        border-radius: 8px;
+        border: 1px solid var(--border-muted);
+        margin-top: 12px;
+        transition: background 0.3s ease;
+      `;
+      bgGradientBlock.appendChild(gradientPreview);
+    }
+    
+    return gradientPreview;
+  }
+
+  function updateGradientLivePreview() {
+    if (!bgGradientBlock || bgGradientBlock.hidden) return;
+    
+    const preview = createGradientPreview();
+    const colors = [bgGradColor1.value, bgGradColor2.value, bgGradColor3.value]
+      .filter(c => c);
+    const angle = bgGradientAngleInput.value || 180;
+    
+    if (colors.length >= 2) {
+      preview.style.background = `linear-gradient(${angle}deg, ${colors.join(', ')})`;
+    } else {
+      preview.style.background = 'var(--bg)';
+    }
+  }
+
+  function createCardGradientPreview() {
+    // Check if card gradient preview already exists
+    let gradientPreview = cardBgGradientBlock.querySelector('.card-gradient-live-preview');
+    
+    if (!gradientPreview) {
+      gradientPreview = document.createElement('div');
+      gradientPreview.className = 'card-gradient-live-preview';
+      gradientPreview.style.cssText = `
+        width: 100%;
+        height: 60px;
+        border-radius: 8px;
+        border: 1px solid var(--border-muted);
+        margin-top: 12px;
+        transition: background 0.3s ease;
+      `;
+      cardBgGradientBlock.appendChild(gradientPreview);
+    }
+    
+    return gradientPreview;
+  }
+
+  function updateCardGradientLivePreview() {
+    if (!cardBgGradientBlock || cardBgGradientBlock.hidden) return;
+    
+    const preview = createCardGradientPreview();
+    const colors = [cardBgGradColor1.value, cardBgGradColor2.value, cardBgGradColor3.value]
+      .filter(c => c);
+    const angle = cardBgGradientAngleInput.value || 135;
+    
+    if (colors.length >= 2) {
+      preview.style.background = `linear-gradient(${angle}deg, ${colors.join(', ')})`;
+    } else {
+      preview.style.background = 'var(--bg)';
+    }
+  }
+
+  /* ---------------------------------------------------------------------- */
   /*  EVENT BINDINGS
   /* ---------------------------------------------------------------------- */
 
   document.addEventListener("DOMContentLoaded", () => {
+    // Setup tracking and shortcuts
+    setupUnsavedChangesTracking();
+    setupKeyboardShortcuts();
     if (loginForm) {
       loginForm.addEventListener("submit", handleLoginSubmit);
     }
@@ -1008,18 +1599,41 @@
     }
 
     if (cardBgGradColor1) {
-      cardBgGradColor1.addEventListener("input", () => updateCardBgGradientPreview(0));
-      cardBgGradColor1.addEventListener("change", () => updateCardBgGradientPreview(0));
+      cardBgGradColor1.addEventListener("input", () => {
+        updateCardBgGradientPreview(0);
+        updateCardGradientLivePreview();
+      });
+      cardBgGradColor1.addEventListener("change", () => {
+        updateCardBgGradientPreview(0);
+        updateCardGradientLivePreview();
+      });
     }
 
     if (cardBgGradColor2) {
-      cardBgGradColor2.addEventListener("input", () => updateCardBgGradientPreview(1));
-      cardBgGradColor2.addEventListener("change", () => updateCardBgGradientPreview(1));
+      cardBgGradColor2.addEventListener("input", () => {
+        updateCardBgGradientPreview(1);
+        updateCardGradientLivePreview();
+      });
+      cardBgGradColor2.addEventListener("change", () => {
+        updateCardBgGradientPreview(1);
+        updateCardGradientLivePreview();
+      });
     }
 
     if (cardBgGradColor3) {
-      cardBgGradColor3.addEventListener("input", () => updateCardBgGradientPreview(2));
-      cardBgGradColor3.addEventListener("change", () => updateCardBgGradientPreview(2));
+      cardBgGradColor3.addEventListener("input", () => {
+        updateCardBgGradientPreview(2);
+        updateCardGradientLivePreview();
+      });
+      cardBgGradColor3.addEventListener("change", () => {
+        updateCardBgGradientPreview(2);
+        updateCardGradientLivePreview();
+      });
+    }
+
+    if (cardBgGradientAngleInput) {
+      cardBgGradientAngleInput.addEventListener("input", updateCardGradientLivePreview);
+      cardBgGradientAngleInput.addEventListener("change", updateCardGradientLivePreview);
     }
 
     if (bgColorInput) {
@@ -1028,18 +1642,41 @@
     }
 
     if (bgGradColor1) {
-      bgGradColor1.addEventListener("input", () => updateGradientPreview(0));
-      bgGradColor1.addEventListener("change", () => updateGradientPreview(0));
+      bgGradColor1.addEventListener("input", () => {
+        updateGradientPreview(0);
+        updateGradientLivePreview();
+      });
+      bgGradColor1.addEventListener("change", () => {
+        updateGradientPreview(0);
+        updateGradientLivePreview();
+      });
     }
 
     if (bgGradColor2) {
-      bgGradColor2.addEventListener("input", () => updateGradientPreview(1));
-      bgGradColor2.addEventListener("change", () => updateGradientPreview(1));
+      bgGradColor2.addEventListener("input", () => {
+        updateGradientPreview(1);
+        updateGradientLivePreview();
+      });
+      bgGradColor2.addEventListener("change", () => {
+        updateGradientPreview(1);
+        updateGradientLivePreview();
+      });
     }
 
     if (bgGradColor3) {
-      bgGradColor3.addEventListener("input", () => updateGradientPreview(2));
-      bgGradColor3.addEventListener("change", () => updateGradientPreview(2));
+      bgGradColor3.addEventListener("input", () => {
+        updateGradientPreview(2);
+        updateGradientLivePreview();
+      });
+      bgGradColor3.addEventListener("change", () => {
+        updateGradientPreview(2);
+        updateGradientLivePreview();
+      });
+    }
+
+    if (bgGradientAngleInput) {
+      bgGradientAngleInput.addEventListener("input", updateGradientLivePreview);
+      bgGradientAngleInput.addEventListener("change", updateGradientLivePreview);
     }
 
     if (addSocialBtn) {
@@ -1087,17 +1724,29 @@
           return;
         }
         try {
+          bgImageUploadBtn.disabled = true;
+          bgImageUploadBtn.classList.add('loading');
+          bgImageUploadBtn.textContent = 'Uploading...';
+          
           setSettingsStatus("Uploading background image…");
           const res = await uploadFile(file);
-          if (res && res.id) {
+          if (res && res.id && res.url) {
             bgImageIdInput.value = String(res.id);
             setSettingsStatus("Background image uploaded.");
+            
+            // Show preview
+            showBackgroundImagePreview(res.url);
           } else {
             setSettingsStatus("Background image upload failed.", true);
           }
         } catch (err) {
           console.error(err);
           setSettingsStatus("Background image upload failed.", true);
+          alert("Upload failed. Please try again.");
+        } finally {
+          bgImageUploadBtn.disabled = false;
+          bgImageUploadBtn.classList.remove('loading');
+          bgImageUploadBtn.textContent = 'Upload';
         }
       });
     }

@@ -1,0 +1,23 @@
+@font-face {
+  font-family: 'changa';
+  src: url('/fonts/changa-regular.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'changa';
+  src: url('/fonts/changa-medium.woff2') format('woff2');
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'changa';
+  src: url('/fonts/changa-bold.woff2') format('woff2');
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}

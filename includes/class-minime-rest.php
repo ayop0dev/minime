@@ -29,20 +29,55 @@ class Minime_REST {
 
     /**
      * Register all REST API routes.
+     *
+     * ARCHITECTURE:
+     * - Public endpoints (no auth):
+     *   - GET /public: Card data for frontend display
+     *   - POST /login: Legacy token-based login (optional, can be deprecated)
+     *   - POST /request-password-reset: Password reset request
+     *   - POST /reset-password: Password reset completion
+     *
+     * - Admin endpoints (cookie auth + nonce):
+     *   - GET /admin: Full admin data for dashboard
+     *   - POST /save: Save all settings
+     *   - POST /upload-image: Upload image to media library
+     *   - POST /admin-slug: Update admin slug (rewrite rules trigger)
      */
     private static function register_routes() {
-        // Public endpoint: Get data
-        register_rest_route(
+        // DEBUG: Test endpoint to verify REST API is working
+        $test_result = register_rest_route(
             'minime/v1',
-            'data',
+            'test',
             array(
                 'methods'             => 'GET',
-                'callback'            => array( __CLASS__, 'get_data' ),
+                'callback'            => array( __CLASS__, 'test_endpoint' ),
                 'permission_callback' => '__return_true',
             )
         );
 
-        // Public endpoint: Login
+        // Public endpoint: Get public card data (no auth required)
+        register_rest_route(
+            'minime/v1',
+            'public',
+            array(
+                'methods'             => 'GET',
+                'callback'            => array( __CLASS__, 'get_public_data' ),
+                'permission_callback' => '__return_true',
+            )
+        );
+
+        // Admin endpoint: Get full admin data (requires login + nonce)
+        $admin_result = register_rest_route(
+            'minime/v1',
+            'admin',
+            array(
+                'methods'             => 'GET',
+                'callback'            => array( __CLASS__, 'get_admin_data' ),
+                'permission_callback' => array( __CLASS__, 'permission_admin' ),
+            )
+        );
+
+        // Public endpoint: Login (legacy token-based, optional)
         register_rest_route(
             'minime/v1',
             'login',
@@ -96,6 +131,17 @@ class Minime_REST {
                 'permission_callback' => array( __CLASS__, 'permission_upload' ),
             )
         );
+
+        // Admin endpoint: Update admin slug
+        register_rest_route(
+            'minime/v1',
+            'admin-slug',
+            array(
+                'methods'             => 'POST',
+                'callback'            => array( __CLASS__, 'update_admin_slug' ),
+                'permission_callback' => array( __CLASS__, 'permission_admin' ),
+            )
+        );
     }
 
     /* ========================================================================= */
@@ -103,13 +149,29 @@ class Minime_REST {
     /* ========================================================================= */
 
     /**
-     * GET /minime/v1/data
-     * Returns public frontend/admin data.
+     * DEBUG: Test endpoint to verify REST API is working
+     * 
+     * @return WP_REST_Response
+     */
+    public static function test_endpoint() {
+        return rest_ensure_response( array(
+            'success'       => true,
+            'message'       => 'Minime REST API is working!',
+            'current_user'  => get_current_user_id(),
+            'is_logged_in'  => is_user_logged_in(),
+            'timestamp'     => current_time( 'mysql' ),
+        ) );
+    }
+
+    /**
+     * GET /minime/v1/public
+     * Returns ONLY public card data needed for frontend display.
+     * No authentication required. Returns cleaned/minimal data.
      *
      * @param WP_REST_Request $request Request object.
      * @return WP_REST_Response Response object.
      */
-    public static function get_data( WP_REST_Request $request ) {
+    public static function get_public_data( WP_REST_Request $request ) {
         $settings = minime_get_settings();
 
         // Core site meta: Name & Subtitle - get raw values without HTML encoding
@@ -118,24 +180,18 @@ class Minime_REST {
 
         // Site icon (WordPress core) – avatar for card + favicon
         $site_icon_url = get_site_icon_url();
-        $site_icon_id  = (int) get_option( 'site_icon', 0 );
 
         // Background: resolve URLs for image if we have IDs
+        // IMPORTANT: Exclude custom_code entirely from public endpoint
         $bg          = $settings['background'];
         $bg_type     = isset( $bg['type'] ) ? $bg['type'] : 'image';
         $bg_image_id = isset( $bg['image_id'] ) ? (int) $bg['image_id'] : 0;
-
         $bg_image_url = $bg_image_id ? wp_get_attachment_url( $bg_image_id ) : '';
-
-        $bg_color    = isset( $bg['color'] ) ? $bg['color'] : '#000000';
+        $bg_color    = isset( $bg['color'] ) ? sanitize_hex_color( $bg['color'] ) ?: '#000000' : '#000000';
         $bg_gradient = isset( $bg['gradient'] ) && is_array( $bg['gradient'] ) ? $bg['gradient'] : array(
             'colors' => array(),
             'angle'  => 180,
         );
-        
-        // Re-encode custom_code to Base64 for frontend (stored as decoded HTML internally)
-        $bg_custom_raw = isset( $bg['custom_code'] ) ? $bg['custom_code'] : '';
-        $bg_custom     = base64_encode( $bg_custom_raw );
 
         // Socials – build normalized URLs
         $socials_raw = $settings['socials'];
@@ -159,7 +215,7 @@ class Minime_REST {
                     'type'   => $type,
                     'value'  => $value,
                     'url'    => $url,
-                    'icon'   => $type, // frontend decides which icon to render
+                    'icon'   => $type,
                 );
             }
         }
@@ -177,10 +233,9 @@ class Minime_REST {
                     continue;
                 }
 
-                // Use same normalization
                 $url = self::normalize_contact_url( 'button', $value );
                 if ( $url === '' ) {
-                    $url = $value; // fallback
+                    $url = $value;
                 }
 
                 $buttons[] = array(
@@ -201,59 +256,188 @@ class Minime_REST {
             $public_url = home_url( '/' );
         }
 
-        // Card Background - separate from page background
+        // Card Background - SOLID COLOR ONLY (no gradient/type for public)
         $card_bg = isset( $settings['card_background'] ) ? $settings['card_background'] : array();
-        $card_bg_type = isset( $card_bg['type'] ) ? $card_bg['type'] : 'solid';
-        $card_bg_color = isset( $card_bg['color'] ) ? $card_bg['color'] : '#ffffff';
-        $card_bg_gradient = isset( $card_bg['gradient'] ) && is_array( $card_bg['gradient'] ) ? $card_bg['gradient'] : array(
-            'colors' => array( '#ffffff', '#eeeeee' ),
-            'angle'  => 135,
-        );
+        $card_bg_color = isset( $card_bg['color'] ) ? sanitize_hex_color( $card_bg['color'] ) ?: '#ffffff' : '#ffffff';
 
-        return array(
-            // Identity – Name/Subtitle/Bio
+        return rest_ensure_response( array(
+            // Identity
             'site_title'   => $site_title,
             'site_tagline' => $site_tagline,
-            'name'         => $site_title,   // alias for frontend card
-            'subtitle'     => $site_tagline, // alias for frontend card
             'bio'          => $settings['bio'],
 
-            // Avatar / icon
-            'site_icon_id'  => $site_icon_id,
+            // Avatar
             'site_icon_url' => $site_icon_url,
 
-            // Background
+            // Background (no custom_code)
             'background' => array(
-                'type'         => $bg_type,
-                'image_id'     => $bg_image_id,
+                'type'     => $bg_type,
                 'image_url'    => $bg_image_url,
-                'color'        => $bg_color,
-                'gradient'     => array(
+                'color'    => $bg_color,
+                'gradient' => array(
                     'colors' => isset( $bg_gradient['colors'] ) ? $bg_gradient['colors'] : array(),
                     'angle'  => isset( $bg_gradient['angle'] ) ? (int) $bg_gradient['angle'] : 180,
                 ),
-                'custom_code'  => $bg_custom,
             ),
 
-            // Card Background - separate from page background
+            // Card Background - COLOR ONLY
             'card_background' => array(
-                'type'     => $card_bg_type,
-                'color'    => $card_bg_color,
-                'gradient' => array(
-                    'colors' => isset( $card_bg_gradient['colors'] ) ? $card_bg_gradient['colors'] : array( '#ffffff', '#eeeeee' ),
-                    'angle'  => isset( $card_bg_gradient['angle'] ) ? (int) $card_bg_gradient['angle'] : 135,
-                ),
+                'color' => $card_bg_color,
             ),
 
             // Social links & buttons
             'socials' => $socials,
             'buttons' => $buttons,
-            
-            // Public page URL
+
+            // URLs
+            'public_url' => $public_url,
+        ) );
+    }
+
+    /**
+     * GET /minime/v1/admin
+     * Returns FULL admin data for dashboard (authenticated + nonce verified).
+     * Includes IDs, custom_code, internal settings.
+     *
+     * @param WP_REST_Request $request Request object.
+     * @return WP_REST_Response Response object.
+     */
+    public static function get_admin_data( WP_REST_Request $request ) {
+        $settings = minime_get_settings();
+
+        // Core site meta
+        $site_title   = html_entity_decode( get_option( 'blogname' ), ENT_QUOTES, 'UTF-8' );
+        $site_tagline = html_entity_decode( get_option( 'blogdescription' ), ENT_QUOTES, 'UTF-8' );
+
+        // Site icon with ID
+        $site_icon_url = get_site_icon_url();
+        $site_icon_id  = (int) get_option( 'site_icon', 0 );
+
+        // Background: FULL data including custom_code and image_id
+        $bg          = $settings['background'];
+        $bg_type     = isset( $bg['type'] ) ? $bg['type'] : 'image';
+        $bg_image_id = isset( $bg['image_id'] ) ? (int) $bg['image_id'] : 0;
+        $bg_image_url = $bg_image_id ? wp_get_attachment_url( $bg_image_id ) : '';
+        $bg_color    = isset( $bg['color'] ) ? sanitize_hex_color( $bg['color'] ) ?: '#000000' : '#000000';
+        $bg_gradient = isset( $bg['gradient'] ) && is_array( $bg['gradient'] ) ? $bg['gradient'] : array(
+            'colors' => array(),
+            'angle'  => 180,
+        );
+
+        // Encode custom_code to Base64 for frontend (stored as decoded HTML internally)
+        $bg_custom_raw = isset( $bg['custom_code'] ) ? $bg['custom_code'] : '';
+        $bg_custom     = base64_encode( $bg_custom_raw );
+
+        // Socials – normalized URLs
+        $socials_raw = $settings['socials'];
+        $socials     = array();
+
+        if ( is_array( $socials_raw ) ) {
+            foreach ( $socials_raw as $row ) {
+                $type  = isset( $row['type'] ) ? $row['type'] : '';
+                $value = isset( $row['value'] ) ? $row['value'] : '';
+
+                if ( $type === '' && $value === '' ) {
+                    continue;
+                }
+
+                $url = self::normalize_contact_url( $type, $value );
+                if ( $url === '' ) {
+                    continue;
+                }
+
+                $socials[] = array(
+                    'type'   => $type,
+                    'value'  => $value,
+                    'url'    => $url,
+                    'icon'   => $type,
+                );
+            }
+        }
+
+        // Buttons – normalized URLs
+        $buttons_raw = $settings['buttons'];
+        $buttons     = array();
+
+        if ( is_array( $buttons_raw ) ) {
+            foreach ( $buttons_raw as $row ) {
+                $label = isset( $row['label'] ) ? $row['label'] : '';
+                $value = isset( $row['value'] ) ? $row['value'] : '';
+
+                if ( $label === '' && $value === '' ) {
+                    continue;
+                }
+
+                $url = self::normalize_contact_url( 'button', $value );
+                if ( $url === '' ) {
+                    $url = $value;
+                }
+
+                $buttons[] = array(
+                    'label' => $label,
+                    'value' => $value,
+                    'url'   => $url,
+                );
+            }
+        }
+
+        // Public URL
+        $minime_page_id = (int) get_option( 'minime_front_page_id', 0 );
+        $public_url = '';
+
+        if ( $minime_page_id && get_post_status( $minime_page_id ) ) {
+            $public_url = get_permalink( $minime_page_id );
+        } else {
+            $public_url = home_url( '/' );
+        }
+
+        // Card Background - FULL data for editing
+        $card_bg = isset( $settings['card_background'] ) ? $settings['card_background'] : array();
+        $card_bg_color = isset( $card_bg['color'] ) ? sanitize_hex_color( $card_bg['color'] ) ?: '#ffffff' : '#ffffff';
+
+        // Admin slug for dashboard context
+        $admin_slug = minime_get_admin_slug();
+
+        return rest_ensure_response( array(
+            // Identity
+            'site_title'   => $site_title,
+            'site_tagline' => $site_tagline,
+            'bio'          => $settings['bio'],
+
+            // Avatar with ID
+            'site_icon_id'  => $site_icon_id,
+            'site_icon_url' => $site_icon_url,
+
+            // Background - FULL data
+            'background' => array(
+                'type'        => $bg_type,
+                'image_id'    => $bg_image_id,
+                'image_url'   => $bg_image_url,
+                'color'       => $bg_color,
+                'gradient'    => array(
+                    'colors' => isset( $bg_gradient['colors'] ) ? $bg_gradient['colors'] : array(),
+                    'angle'  => isset( $bg_gradient['angle'] ) ? (int) $bg_gradient['angle'] : 180,
+                ),
+                'custom_code' => $bg_custom,
+            ),
+
+            // Card Background - COLOR ONLY (solid only for cards)
+            'card_background' => array(
+                'color' => $card_bg_color,
+            ),
+
+            // Social links & buttons
+            'socials' => $socials,
+            'buttons' => $buttons,
+
+            // URLs & settings
             'public_url' => $public_url,
             'keep_homepage' => isset( $settings['keep_homepage'] ) ? $settings['keep_homepage'] : false,
             'branding_footer_text' => isset( $settings['branding_footer_text'] ) ? $settings['branding_footer_text'] : 'Powered by · Ayop · Headless WP · REST API',
-        );
+
+            // Admin-specific
+            'adminBasePath' => $admin_slug,
+        ) );
     }
 
     /**
@@ -442,6 +626,7 @@ class Minime_REST {
     /**
      * POST /minime/v1/save
      * Save all settings in one request.
+     * Requires: current_user_can('manage_options') + valid X-WP-Nonce header
      *
      * @param WP_REST_Request $request Request object.
      * @return WP_REST_Response Response object.
@@ -565,50 +750,16 @@ class Minime_REST {
 
         $settings['background'] = $bg;
 
-        // --- Card Background (separate from page background) ---
+        // --- Card Background (solid color ONLY) ---
+        // Accept only the 'color' field; ignore type and gradient
         $card_bg = isset( $settings['card_background'] ) ? $settings['card_background'] : array();
 
         if ( isset( $params['card_background'] ) && is_array( $params['card_background'] ) ) {
             $card_bg_input = $params['card_background'];
 
-            // Type: solid or gradient
-            if ( isset( $card_bg_input['type'] ) ) {
-                $type = sanitize_text_field( $card_bg_input['type'] );
-                $card_bg['type'] = in_array( $type, array( 'solid', 'gradient' ), true ) ? $type : 'solid';
-            }
-
-            // Solid color
+            // Solid color only
             if ( isset( $card_bg_input['color'] ) ) {
                 $card_bg['color'] = sanitize_hex_color( $card_bg_input['color'] ) ?: '#ffffff';
-            }
-
-            // Gradient
-            if ( isset( $card_bg_input['gradient'] ) && is_array( $card_bg_input['gradient'] ) ) {
-                $g = $card_bg_input['gradient'];
-
-                $colors = array();
-                if ( isset( $g['colors'] ) && is_array( $g['colors'] ) ) {
-                    foreach ( $g['colors'] as $c ) {
-                        $c = sanitize_hex_color( $c );
-                        if ( $c ) {
-                            $colors[] = $c;
-                        }
-                    }
-                }
-                // Limit to 3 colors
-                $colors = array_slice( $colors, 0, 3 );
-                if ( empty( $colors ) ) {
-                    $colors = array( '#ffffff', '#eeeeee' );
-                }
-
-                $angle = isset( $g['angle'] ) ? (int) $g['angle'] : 135;
-                if ( $angle < 0 )   $angle = 0;
-                if ( $angle > 360 ) $angle = 360;
-
-                $card_bg['gradient'] = array(
-                    'colors' => $colors,
-                    'angle'  => $angle,
-                );
             }
         }
 
@@ -704,6 +855,7 @@ class Minime_REST {
     /**
      * POST /minime/v1/upload-image
      * Upload an image to WordPress Media Library.
+     * Hardened with file size limit (5MB) and image mime type validation.
      *
      * @param WP_REST_Request $request Request object.
      * @return WP_REST_Response|WP_Error Response object or error.
@@ -720,6 +872,41 @@ class Minime_REST {
         }
 
         $file = $files['file'];
+
+        // --- File size check: limit to 5MB ---
+        $max_size = 5 * 1024 * 1024; // 5MB in bytes
+        if ( isset( $file['size'] ) && $file['size'] > $max_size ) {
+            return new WP_Error(
+                'file_too_large',
+                __( 'File size exceeds 5MB limit.', 'minime' ),
+                array( 'status' => 400 )
+            );
+        }
+
+        // --- Mime type check: verify real file type, don't trust $file['type'] ---
+        $file_check = wp_check_filetype_and_ext( $file['tmp_name'], $file['name'] );
+        $file_type = isset( $file_check['type'] ) ? $file_check['type'] : '';
+        $file_ext = isset( $file_check['ext'] ) ? $file_check['ext'] : '';
+
+        $allowed_extensions = array( 'jpg', 'jpeg', 'png', 'gif', 'webp' );
+        $allowed_mimes = array( 'image/jpeg', 'image/png', 'image/gif', 'image/webp' );
+
+        if ( ! in_array( $file_ext, $allowed_extensions, true ) || ! in_array( $file_type, $allowed_mimes, true ) ) {
+            // Reject SVG with clear message
+            if ( $file_ext === 'svg' || strpos( $file_type, 'svg' ) !== false ) {
+                return new WP_Error(
+                    'svg_not_allowed',
+                    __( 'SVG files are not currently supported.', 'minime' ),
+                    array( 'status' => 400 )
+                );
+            }
+
+            return new WP_Error(
+                'invalid_mime_type',
+                __( 'Only image files are allowed (JPEG, PNG, GIF, WebP).', 'minime' ),
+                array( 'status' => 400 )
+            );
+        }
 
         if ( ! function_exists( 'media_handle_sideload' ) ) {
             require_once ABSPATH . 'wp-admin/includes/file.php';
@@ -755,63 +942,116 @@ class Minime_REST {
         ) );
     }
 
+    /**
+     * POST /minime/v1/admin-slug
+     * Update the admin slug (rewrite rules base).
+     * Requires: current_user_can('manage_options') + valid X-WP-Nonce header
+     *
+     * @param WP_REST_Request $request Request object.
+     * @return WP_REST_Response|WP_Error Response object or error.
+     */
+    public static function update_admin_slug( WP_REST_Request $request ) {
+        $params = $request->get_json_params();
+        $slug   = isset( $params['slug'] ) ? sanitize_text_field( $params['slug'] ) : '';
+
+        if ( $slug === '' ) {
+            return new WP_Error(
+                'empty_slug',
+                __( 'Admin slug cannot be empty.', 'minime' ),
+                array( 'status' => 400 )
+            );
+        }
+
+        // Additional sanitization: slugify and lowercase
+        $slug = sanitize_title( $slug );
+        $slug = strtolower( $slug );
+        $slug = trim( $slug );
+
+        if ( $slug === '' ) {
+            return new WP_Error(
+                'invalid_slug',
+                __( 'Admin slug must contain at least one alphanumeric character.', 'minime' ),
+                array( 'status' => 400 )
+            );
+        }
+
+        // Reserved slugs that conflict with WordPress
+        $reserved_slugs = array(
+            'wp-admin',
+            'wp-login',
+            'wp-json',
+            'minime',
+            'admin',
+            'login',
+            'assets',
+        );
+
+        if ( in_array( $slug, $reserved_slugs, true ) ) {
+            return new WP_Error(
+                'reserved_slug',
+                sprintf(
+                    __( 'The slug "%s" is reserved and cannot be used.', 'minime' ),
+                    $slug
+                ),
+                array( 'status' => 400 )
+            );
+        }
+
+        // Update the option
+        update_option( 'minime_admin_slug', $slug );
+
+        // Flush rewrite rules to apply new slug-based routing
+        Minime_Admin::maybe_flush_rewrites_on_change();
+
+        // Build the new admin URL (match the saved slug)
+        $admin_url = home_url( '/' . $slug . '/' );
+
+        return rest_ensure_response( array(
+            'ok'   => true,
+            'slug' => $slug,
+            'url'  => $admin_url,
+            'message' => __( 'Admin slug updated successfully.', 'minime' ),
+        ) );
+    }
+
     /* ========================================================================= */
     /* AUTHENTICATION HELPERS                                                    */
     /* ========================================================================= */
 
     /**
-     * Verify authentication token or cookie-based auth.
+     * Verify admin access via nonce + cookie auth.
+     * MANDATORY: X-WP-Nonce header required for all admin requests.
+     * Nonce is verified against 'wp_rest' action.
      *
      * @param WP_REST_Request $request Request object.
-     * @param string $capability Required capability.
+     * @param string $capability Required capability (e.g., 'manage_options').
      * @return bool|WP_Error True if authorized, WP_Error otherwise.
      */
-    private static function verify_token( WP_REST_Request $request, $capability ) {
-        // 1) header token
-        $token = $request->get_header( 'x-minime-token' );
-
-        // 2) query param fallback
-        if ( ! $token ) {
-            $token = $request->get_param( 'token' );
-        }
-
-        // no token → fallback to cookie-based WP auth
-        if ( ! $token ) {
-            if ( current_user_can( $capability ) ) {
-                return true;
-            }
-
+    private static function verify_auth( WP_REST_Request $request, $capability ) {
+        // --- MANDATORY: Check for X-WP-Nonce header ---
+        $nonce = $request->get_header( 'x-wp-nonce' );
+        if ( ! $nonce ) {
             return new WP_Error(
-                'forbidden',
-                __( 'You must be logged in as an administrator.', 'minime' ),
+                'missing_nonce',
+                __( 'X-WP-Nonce header is required for admin endpoints.', 'minime' ),
                 array( 'status' => 403 )
             );
         }
 
-        $user_id = get_transient( 'minime_api_token_' . $token );
-        if ( ! $user_id ) {
+        // Verify nonce
+        if ( ! wp_verify_nonce( $nonce, 'wp_rest' ) ) {
             return new WP_Error(
-                'forbidden',
-                __( 'Authentication token is invalid or expired.', 'minime' ),
+                'invalid_nonce',
+                __( 'Invalid or expired nonce header.', 'minime' ),
                 array( 'status' => 403 )
             );
         }
 
-        $user = get_user_by( 'id', $user_id );
-        if ( ! $user ) {
+        // Check capability
+        if ( ! current_user_can( $capability ) ) {
             return new WP_Error(
-                'forbidden',
-                __( 'User not found for this token.', 'minime' ),
-                array( 'status' => 403 )
-            );
-        }
-
-        wp_set_current_user( $user_id );
-
-        if ( ! user_can( $user, $capability ) ) {
-            return new WP_Error(
-                'forbidden',
-                __( 'You must be logged in as an administrator.', 'minime' ),
+                'insufficient_permission',
+                __( 'You do not have permission to access this resource.', 'minime' ),
                 array( 'status' => 403 )
             );
         }
@@ -821,24 +1061,24 @@ class Minime_REST {
 
     /**
      * Permission callback for admin endpoints.
-     * Requires 'manage_options' capability.
+     * Requires 'manage_options' capability + valid nonce/auth.
      *
      * @param WP_REST_Request $request Request object.
      * @return bool|WP_Error True if authorized, WP_Error otherwise.
      */
     public static function permission_admin( WP_REST_Request $request ) {
-        return self::verify_token( $request, 'manage_options' );
+        return self::verify_auth( $request, 'manage_options' );
     }
 
     /**
      * Permission callback for upload endpoints.
-     * Requires 'upload_files' capability.
+     * Requires 'upload_files' capability + valid nonce/auth.
      *
      * @param WP_REST_Request $request Request object.
      * @return bool|WP_Error True if authorized, WP_Error otherwise.
      */
     public static function permission_upload( WP_REST_Request $request ) {
-        return self::verify_token( $request, 'upload_files' );
+        return self::verify_auth( $request, 'upload_files' );
     }
 
     /* ========================================================================= */

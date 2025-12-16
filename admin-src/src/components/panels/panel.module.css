@@ -1,0 +1,384 @@
+/* Panel Styles - iOS-inspired cards with clean spacing */
+
+.panel {
+  display: flex;
+  flex-direction: column;
+  gap: 32px;
+}
+
+.header {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.title {
+  font-size: 32px;
+  font-weight: 700;
+  margin: 0;
+  padding: 0;
+  color: var(--text);
+}
+
+.description {
+  font-size: 15px;
+  margin: 0;
+  padding: 0;
+  color: var(--text-muted);
+}
+
+/* Grid Layout */
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 16px;
+}
+
+/* Card Styles */
+.card {
+  display: flex;
+  flex-direction: column;
+  background: var(--highlight);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-muted);
+  overflow: hidden;
+  box-shadow: var(--shadow-sm);
+  transition: all 0.2s ease;
+}
+
+.card:hover {
+  box-shadow: var(--shadow-md);
+  border-color: var(--border);
+}
+
+.largeCard {
+  grid-column: 1 / -1;
+}
+
+.cardHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 20px;
+  border-bottom: 1px solid var(--border-muted);
+}
+
+.cardTitle {
+  font-size: 17px;
+  font-weight: 600;
+  margin: 0;
+  padding: 0;
+  color: var(--text);
+}
+
+.badge {
+  display: inline-block;
+  padding: 4px 8px;
+  background: var(--bg-dark);
+  color: var(--text-muted);
+  border-radius: var(--radius-sm);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.cardContent {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  padding: 0;
+}
+
+/* Settings Panel Items */
+.settingItem {
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border-muted);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.settingItem:last-child {
+  border-bottom: none;
+}
+
+.label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
+.placeholder {
+  font-size: 14px;
+  color: var(--text);
+  margin: 0;
+  padding: 0;
+}
+
+.value {
+  font-size: 14px;
+  color: var(--text);
+  margin: 0;
+  padding: 0;
+  font-weight: 500;
+}
+
+/* List Container */
+.listContainer {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.list {
+  display: flex;
+  flex-direction: column;
+}
+
+.listItem {
+  padding: 16px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.listItemContent {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.postTitle {
+  font-size: 15px;
+  font-weight: 600;
+  margin: 0 0 4px 0;
+  padding: 0;
+  color: var(--text);
+}
+
+.postMeta {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin: 0;
+  padding: 0;
+}
+
+.postCount {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--primary);
+  padding: 4px 8px;
+  background: rgba(var(--primary), 0.1);
+  border-radius: var(--radius-sm);
+  min-width: fit-content;
+}
+
+.listDivider {
+  height: 1px;
+  background: var(--border-muted);
+  margin-top: 12px;
+}
+
+/* Stats Grid */
+.statsGrid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0;
+  padding: 20px;
+}
+
+.statItem {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: center;
+  padding: 12px;
+  text-align: center;
+}
+
+.statItem:not(:last-child) {
+  border-right: 1px solid var(--border-muted);
+}
+
+.statLabel {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  margin: 0;
+  padding: 0;
+  text-transform: uppercase;
+}
+
+.statValue {
+  font-size: 24px;
+  font-weight: 700;
+  color: var(--primary);
+  margin: 0;
+  padding: 0;
+}
+
+/* Plan Content */
+.planContent {
+  padding: 24px 20px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 32px;
+}
+
+.planSection {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.planName {
+  font-size: 28px;
+  font-weight: 700;
+  margin: 0;
+  padding: 0;
+  color: var(--text);
+}
+
+.planPrice {
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--primary);
+  margin: 0;
+  padding: 0;
+}
+
+.planDescription {
+  font-size: 13px;
+  color: var(--text-muted);
+  margin: 0;
+  padding: 0;
+  line-height: 1.5;
+}
+
+.planFeatures {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.feature {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 14px;
+  color: var(--text);
+}
+
+.featureIcon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  font-size: 12px;
+  color: var(--success);
+  font-weight: bold;
+}
+
+.featureText {
+}
+
+/* Billing Items */
+.billingItem {
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border-muted);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.billingItem:last-child {
+  border-bottom: none;
+}
+
+/* Usage Items */
+.usageItem {
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border-muted);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.usageItem:last-child {
+  border-bottom: none;
+}
+
+.usageLabel {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+
+.usageValue {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.progressBar {
+  height: 4px;
+  background: var(--bg-dark);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.progress {
+  height: 100%;
+  background: var(--primary);
+  border-radius: 2px;
+  transition: width 0.3s ease;
+}
+
+/* Mobile responsiveness */
+@media (max-width: 768px) {
+  .title {
+    font-size: 24px;
+  }
+
+  .grid {
+    grid-template-columns: 1fr;
+  }
+
+  .largeCard {
+    grid-column: auto;
+  }
+
+  .cardHeader {
+    padding: 16px;
+  }
+
+  .settingItem {
+    padding: 12px 16px;
+  }
+
+  .planContent {
+    grid-template-columns: 1fr;
+    gap: 20px;
+    padding: 16px;
+  }
+
+  .statsGrid {
+    grid-template-columns: 1fr;
+    gap: 12px;
+    padding: 16px;
+  }
+
+  .statItem {
+    border-right: none;
+    border-bottom: 1px solid var(--border-muted);
+    padding: 12px 0;
+  }
+
+  .statItem:last-child {
+    border-bottom: none;
+  }
+}

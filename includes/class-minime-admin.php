@@ -1,9 +1,19 @@
 <?php
 /**
- * WordPress Admin Dashboard integration for minime plugin.
- * Handles the admin menu page and overview panel.
+ * External Next.js Admin Panel routing for minime plugin.
+ * Handles URL rewriting and template loading for the admin interface.
+ * No WordPress wp-admin integration - uses external Next.js app via rewrite rules.
  *
  * @package minime
+ *
+ * ARCHITECTURE CHANGES:
+ * - Removed wp-admin menu page rendering and POST form handler
+ * - Removed hardcoded /admin page assumption (minime_admin_page_id)
+ * - Implemented rewrite rules for dynamic admin slug (minime_get_admin_slug())
+ * - Added template_redirect hook to serve Next.js admin shell on admin route
+ * - Added maybe_flush_rewrites_on_change() for slug change handling
+ * - Optional: wp-admin menu item now redirects to external admin URL
+ * - Per-site option aware: uses minime_get_admin_slug() which reads per-site option
  */
 
 if ( ! defined( 'ABSPATH' ) ) {
@@ -13,133 +23,120 @@ if ( ! defined( 'ABSPATH' ) ) {
 class Minime_Admin {
 
     /**
-     * Initialize admin hooks.
+     * Initialize admin routing.
      */
     public static function init() {
-        add_action( 'admin_menu', array( __CLASS__, 'register_admin_page' ) );
+        // Register rewrite rules for admin URL routing
+        add_action( 'init', array( __CLASS__, 'register_rewrite_rules' ), 10 );
+        
+        // Register query variable for admin detection
+        add_filter( 'query_vars', array( __CLASS__, 'register_query_vars' ) );
+        
+        // Handle admin template on frontend via template_redirect
+        add_action( 'template_redirect', array( __CLASS__, 'handle_admin_template_redirect' ), 1 );
+        
+        // Optional: add wp-admin menu redirect to external admin
+        add_action( 'admin_menu', array( __CLASS__, 'register_admin_menu_redirect' ) );
     }
 
     /**
-     * Register the admin menu page.
+     * Register rewrite rules for the dynamic admin slug.
+     * Converts /mm (or custom slug) requests to index.php?minime_admin=1
      */
-    public static function register_admin_page() {
+    public static function register_rewrite_rules() {
+        $slug = minime_get_admin_slug();
+        
+        // Build rewrite rule for admin slug
+        add_rewrite_rule(
+            '^' . $slug . '(/.*)?$',
+            'index.php?minime_admin=1',
+            'top'
+        );
+    }
+
+    /**
+     * Register minime_admin query variable.
+     */
+    public static function register_query_vars( $query_vars ) {
+        $query_vars[] = 'minime_admin';
+        return $query_vars;
+    }
+
+    /**
+     * Handle template redirect for admin requests.
+     * When minime_admin=1 query var is set, load the admin shell template.
+     * Requires user to be logged in and sets proper headers.
+     */
+    public static function handle_admin_template_redirect() {
+        if ( ! get_query_var( 'minime_admin' ) ) {
+            return;
+        }
+
+        // Require user to be logged in
+        if ( ! is_user_logged_in() ) {
+            auth_redirect();
+        }
+
+        // Set response headers
+        status_header( 200 );
+        nocache_headers();
+
+        // Locate and include the admin shell template
+        $template_path = plugin_dir_path( dirname( __FILE__ ) ) . 'templates/admin-shell.php';
+        
+        if ( ! file_exists( $template_path ) ) {
+            wp_die(
+                wp_kses_post(
+                    '<h1>Admin Panel Not Found</h1>' .
+                    '<p>The admin panel template is missing.</p>' .
+                    '<p>Please run <code>npm run deploy</code> from the admin-src directory to build and deploy the Next.js admin app.</p>'
+                ),
+                'Admin Panel Missing',
+                array( 'response' => 500 )
+            );
+        }
+
+        include $template_path;
+        exit;
+    }
+
+    /**
+     * Register wp-admin menu item that redirects to external admin URL.
+     * Only visible to users with manage_options capability.
+     * No UI rendered - just a redirect link in the menu.
+     */
+    public static function register_admin_menu_redirect() {
+        if ( ! current_user_can( 'manage_options' ) ) {
+            return;
+        }
+
         add_menu_page(
             'minime',
             'minime',
             'manage_options',
-            'minime-dashboard',
-            array( __CLASS__, 'render_admin_page' ),
+            'minime-admin',
+            array( __CLASS__, 'redirect_to_external_admin' ),
             'dashicons-admin-links',
             25
         );
     }
 
     /**
-     * Render the admin dashboard page.
+     * Redirect wp-admin menu click to external admin URL.
      */
-    public static function render_admin_page() {
-        if ( ! current_user_can( 'manage_options' ) ) {
-            return;
-        }
-
-        // Handle form submission
-        if ( isset( $_POST['minime_overview_form'] )
-             && isset( $_POST['minime_overview_nonce'] )
-             && wp_verify_nonce( $_POST['minime_overview_nonce'], 'minime_save_overview' )
-             && current_user_can( 'manage_options' ) ) {
-            
-            self::handle_admin_save();
-            echo '<div class="notice notice-success is-dismissible"><p>' . esc_html__( 'minime settings updated successfully.', 'minime' ) . '</p></div>';
-        }
-
-        // Include the admin page template
-        $settings = minime_get_settings();
-        $site_title = get_bloginfo( 'name' );
-        $site_tagline = get_bloginfo( 'description' );
-        $bio = isset( $settings['bio'] ) ? $settings['bio'] : '';
-        $background = isset( $settings['background'] ) ? $settings['background'] : array();
-        $site_icon_id = (int) get_option( 'site_icon', 0 );
-        $site_icon_url = get_site_icon_url();
-        $minime_page_id = (int) get_option( 'minime_front_page_id', 0 );
-        $admin_page_id = (int) get_option( 'minime_admin_page_id', 0 );
-        $public_url = $minime_page_id ? get_permalink( $minime_page_id ) : home_url( '/' );
-        $admin_url = $admin_page_id ? get_permalink( $admin_page_id ) : home_url( '/admin' );
-
-        include plugin_dir_path( dirname( __FILE__ ) ) . 'templates/admin-dashboard.php';
+    public static function redirect_to_external_admin() {
+        wp_safe_redirect( minime_get_admin_url() );
+        exit;
     }
 
     /**
-     * Handle admin form submission.
+     * Flush rewrite rules when admin slug changes.
+     * IMPORTANT: Call this only after minime_admin_slug option changes, not on every request.
+     * Uses non-hard flush (false) for performance and to preserve custom rules.
+     *
+     * @return void
      */
-    private static function handle_admin_save() {
-        $settings = minime_get_settings();
-        
-        // Site Title & Tagline - preserve all characters including symbols (< > @ etc)
-        if ( isset( $_POST['site_title'] ) ) {
-            update_option( 'blogname', sanitize_option( 'blogname', $_POST['site_title'] ) );
-        }
-        if ( isset( $_POST['site_tagline'] ) ) {
-            update_option( 'blogdescription', sanitize_option( 'blogdescription', $_POST['site_tagline'] ) );
-        }
-        
-        // Bio
-        if ( isset( $_POST['bio'] ) ) {
-            $settings['bio'] = wp_kses_post( $_POST['bio'] );
-        }
-        
-        // Site Icon
-        if ( isset( $_POST['site_icon_id'] ) ) {
-            $icon_id = intval( $_POST['site_icon_id'] );
-            if ( $icon_id > 0 ) {
-                update_option( 'site_icon', $icon_id );
-            }
-        }
-        
-        // Background
-        $bg = $settings['background'];
-        
-        if ( isset( $_POST['background_type'] ) ) {
-            $bg['type'] = sanitize_text_field( $_POST['background_type'] );
-        }
-        
-        if ( isset( $_POST['background_color'] ) ) {
-            $color = sanitize_hex_color( $_POST['background_color'] );
-            if ( $color ) {
-                $bg['color'] = $color;
-            }
-        }
-        
-        if ( isset( $_POST['background_image_id'] ) ) {
-            $bg['image_id'] = intval( $_POST['background_image_id'] );
-        }
-        
-        if ( isset( $_POST['background_gradient_angle'] ) ) {
-            $angle = intval( $_POST['background_gradient_angle'] );
-            if ( $angle < 0 ) $angle = 0;
-            if ( $angle > 360 ) $angle = 360;
-            $bg['gradient']['angle'] = $angle;
-        }
-        
-        if ( isset( $_POST['background_gradient_colors'] ) ) {
-            $colors_input = sanitize_text_field( $_POST['background_gradient_colors'] );
-            $colors = array_map( 'trim', explode( ',', $colors_input ) );
-            $colors_clean = array();
-            foreach ( $colors as $c ) {
-                $sanitized = sanitize_hex_color( $c );
-                if ( $sanitized ) {
-                    $colors_clean[] = $sanitized;
-                }
-            }
-            $bg['gradient']['colors'] = $colors_clean;
-        }
-        
-        if ( isset( $_POST['background_custom_code'] ) ) {
-            $custom = wp_kses_post( $_POST['background_custom_code'] );
-            $bg['custom_code'] = $custom;
-        }
-        
-        $settings['background'] = $bg;
-        
-        minime_update_settings( $settings );
+    public static function maybe_flush_rewrites_on_change() {
+        flush_rewrite_rules( false );
     }
 }

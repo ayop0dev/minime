@@ -1,0 +1,55 @@
+/* Admin Shell Container - Two-column layout */
+
+.shell {
+  display: flex;
+  height: 100vh;
+  width: 100%;
+  background: var(--bg);
+}
+
+.main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  background: var(--bg);
+}
+
+.content {
+  flex: 1;
+  max-width: 1280px;
+  width: 100%;
+  margin: 0 auto;
+  padding: 32px;
+  animation: fadeIn 0.3s ease-in-out;
+}
+
+/* Fade-in animation for panel transitions */
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Mobile responsiveness */
+@media (max-width: 768px) {
+  .shell {
+    flex-direction: column;
+    height: auto;
+  }
+
+  .main {
+    height: auto;
+    overflow-y: visible;
+  }
+
+  .content {
+    padding: 16px;
+    max-width: 100%;
+  }
+}

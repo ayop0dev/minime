@@ -1,0 +1,12 @@
+{
+  "name": "minime-admin",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "copy": "node scripts/copy-to-plugin.js",
+    "deploy": "npm run build && npm run copy",
+    "clean": "node scripts/clean.js"
+  }
+}

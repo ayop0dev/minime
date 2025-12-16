@@ -18,20 +18,15 @@ if ( ! defined( 'WP_UNINSTALL_PLUGIN' ) ) {
 function minime_uninstall_site() {
     // Get page IDs before deleting options
     $front_page_id = (int) get_option( 'minime_front_page_id', 0 );
-    $admin_page_id = (int) get_option( 'minime_admin_page_id', 0 );
     
     // Delete plugin options
     delete_option( 'minime_settings' );
     delete_option( 'minime_front_page_id' );
-    delete_option( 'minime_admin_page_id' );
+    delete_option( 'minime_admin_slug' );
     
     // Force delete pages (bypass trash)
     if ( $front_page_id > 0 ) {
         wp_delete_post( $front_page_id, true );
-    }
-    
-    if ( $admin_page_id > 0 ) {
-        wp_delete_post( $admin_page_id, true );
     }
     
     // Reset front page if it was set to minime page
