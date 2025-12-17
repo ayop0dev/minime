@@ -77,9 +77,6 @@ export default function SettingsPanel() {
     },
   });
 
-  // Custom CSS
-  const [customCss, setCustomCss] = useState('');
-
   // Footer
   const [showFooterBranding, setShowFooterBranding] = useState(true);
   const [footerText, setFooterText] = useState('');
@@ -192,15 +189,6 @@ export default function SettingsPanel() {
           },
           sandbox: { code: sandboxCode },
         });
-
-        // Decode custom_css from Base64 (UTF-8 safe)
-        if (data.background.custom_css) {
-          try {
-            setCustomCss(b64Decode(data.background.custom_css));
-          } catch (e) {
-            console.warn('Failed to decode custom_css:', e);
-          }
-        }
       }
       // Backward-compatible: prefer branding_footer_text, fall back to footer_text
       setFooterText(data.branding_footer_text || data.footer_text || '');
@@ -451,7 +439,6 @@ export default function SettingsPanel() {
           sandbox: pageBackground.sandbox?.code ? {
             code: b64Encode(pageBackground.sandbox.code),
           } : undefined,
-          custom_css: customCss ? b64Encode(customCss) : undefined,
         },
         branding_footer_text: footerText,
       };
@@ -917,12 +904,12 @@ export default function SettingsPanel() {
                 {pageBackground.type === 'sandbox' && (
                   <div className={settingsStyles.formGroup}>
                     <p className={settingsStyles.helperText}>
-                      Paste HTML/CSS/JS code for a custom background. Rendered in a sandboxed iframe.
+                      Paste CSS or HTML/CSS/JS code for a custom background. Raw CSS is auto-wrapped.
                       External scripts and stylesheets are stripped for security. Max 100KB.
                     </p>
                     <textarea
                       className={settingsStyles.textarea}
-                      placeholder="<style>body { background: linear-gradient(45deg, #ff6b6b, #4ecdc4); }</style>"
+                      placeholder="body { background: linear-gradient(45deg, #ff6b6b, #4ecdc4); }"
                       value={pageBackground.sandbox?.code || ''}
                       onChange={(e) => handleSandboxCodeChange(e.target.value)}
                       rows={10}
@@ -933,22 +920,6 @@ export default function SettingsPanel() {
                     </p>
                   </div>
                 )}
-
-                {/* Custom CSS (always visible, applies to all background types) */}
-                <div className={settingsStyles.formGroup} style={{ marginTop: '16px' }}>
-                  <label className={settingsStyles.inputLabel}>custom css</label>
-                  <p className={settingsStyles.helperText}>
-                    Add custom CSS to style your public page. CSS only—no HTML tags allowed.
-                  </p>
-                  <textarea
-                    className={settingsStyles.textarea}
-                    placeholder=".minime-card { border-radius: 32px; }\n.minime-button { font-weight: 700; }"
-                    value={customCss}
-                    onChange={(e) => setCustomCss(e.target.value)}
-                    rows={6}
-                    style={{ fontFamily: 'monospace', fontSize: '12px' }}
-                  />
-                </div>
               </div>
             </div>
           </div>

@@ -142,6 +142,17 @@ class Minime_REST {
                 'permission_callback' => array( __CLASS__, 'permission_admin' ),
             )
         );
+
+        // Public endpoint: Logout (destroys session)
+        register_rest_route(
+            'minime/v1',
+            'logout',
+            array(
+                'methods'             => 'POST',
+                'callback'            => array( __CLASS__, 'logout' ),
+                'permission_callback' => '__return_true',
+            )
+        );
     }
 
     /* ========================================================================= */
@@ -521,6 +532,21 @@ class Minime_REST {
                 'email' => $user->user_email,
                 'name'  => $user->display_name,
             ),
+        ) );
+    }
+
+    /**
+     * POST /minime/v1/logout
+     * Logout endpoint - destroys WordPress session.
+     *
+     * @param WP_REST_Request $request Request object.
+     * @return WP_REST_Response Response object.
+     */
+    public static function logout( WP_REST_Request $request ) {
+        wp_logout();
+
+        return rest_ensure_response( array(
+            'success' => true,
         ) );
     }
 

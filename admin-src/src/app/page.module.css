@@ -135,3 +135,138 @@
   font-size: 12px;
   border: 1px solid var(--border-muted);
 }
+
+/* Login Form Styles */
+.loginContainer {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: var(--bg);
+}
+
+.loginCard {
+  background: var(--bg-light);
+  border-radius: 20px;
+  padding: 48px;
+  border: 1px solid var(--border-muted);
+  box-shadow: var(--shadow-lg);
+  max-width: 400px;
+  width: 100%;
+}
+
+.loginTitle {
+  font-size: 32px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  margin: 0 0 8px 0;
+  text-align: center;
+  text-transform: lowercase;
+}
+
+.loginSubtitle {
+  font-size: 14px;
+  color: var(--text-muted);
+  text-align: center;
+  margin: 0 0 32px 0;
+  text-transform: lowercase;
+}
+
+.loginForm {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.formGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.label {
+  font-size: 12px;
+  text-transform: lowercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+}
+
+.input {
+  padding: 12px 16px;
+  border: 1px solid var(--border-muted);
+  border-radius: var(--radius-sm);
+  font-size: 14px;
+  background: var(--bg);
+  color: var(--text);
+  transition: border-color 0.2s;
+}
+
+.input:focus {
+  outline: none;
+  border-color: var(--primary);
+}
+
+.input:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.submitButton {
+  padding: 14px 24px;
+  background: var(--primary);
+  color: white;
+  border: none;
+  border-radius: var(--radius-sm);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  text-transform: lowercase;
+  letter-spacing: 0.04em;
+  transition: opacity 0.2s;
+}
+
+.submitButton:hover:not(:disabled) {
+  opacity: 0.9;
+}
+
+.submitButton:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.linkButton {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 13px;
+  cursor: pointer;
+  text-transform: lowercase;
+  text-decoration: underline;
+  padding: 0;
+  text-align: center;
+}
+
+.linkButton:hover {
+  color: var(--text);
+}
+
+.errorMessage {
+  padding: 12px 16px;
+  background: #fee;
+  border: 1px solid #fcc;
+  border-radius: var(--radius-sm);
+  color: #c33;
+  font-size: 13px;
+  margin-bottom: 8px;
+}
+
+.successMessage {
+  padding: 12px 16px;
+  background: #efe;
+  border: 1px solid #cfc;
+  border-radius: var(--radius-sm);
+  color: #3c3;
+  font-size: 13px;
+  margin-bottom: 8px;
+}

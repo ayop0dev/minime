@@ -46,11 +46,19 @@ export default function SideNav({ activeTab, onTabChange }: SideNavProps) {
       <div className={styles.navFooter}>
         <button
           className={styles.logoutButton}
-          onClick={() => {
+          onClick={async () => {
             const config = (window as any).MINIME_ADMIN_CONFIG;
-            if (config?.logoutUrl) {
-              window.location.href = config.logoutUrl;
+            try {
+              const restRoot = config?.restRoot || '/wp-json/';
+              await fetch(restRoot + 'minime/v1/logout', {
+                method: 'POST',
+                credentials: 'include',
+              });
+            } catch (e) {
+              // Ignore errors, proceed to redirect
             }
+            // Redirect back to admin URL (will show login form)
+            window.location.href = config?.logoutUrl || window.location.pathname;
           }}
         >
           <span className={styles.icon}>🚪</span>

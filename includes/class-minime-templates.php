@@ -242,6 +242,8 @@ class Minime_Templates {
                 width: 100%;
                 text-align: center;
                 padding: 40px 30px;
+                background-color: <?php echo esc_attr( $card_color ); ?>;
+                border-radius: 16px;
             }
             .minime-avatar {
                 width: 100px;
@@ -421,6 +423,14 @@ class Minime_Templates {
     private static function render_sandbox_iframe( $code ) {
         if ( empty( $code ) ) {
             return '';
+        }
+
+        // Detect if user input is raw CSS (no HTML tags)
+        // If no <html, <body, <style, <script, <div tags are found, treat as raw CSS
+        $has_html_tags = preg_match( '/<(html|body|style|script|div|span|canvas|svg|head|meta)\b/i', $code );
+        if ( ! $has_html_tags ) {
+            // Wrap raw CSS in <style> tags
+            $code = '<style>' . $code . '</style>';
         }
 
         // Defense-in-depth: strip dangerous elements before building srcdoc

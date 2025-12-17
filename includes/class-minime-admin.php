@@ -72,10 +72,8 @@ class Minime_Admin {
             return;
         }
 
-        // Require user to be logged in
-        if ( ! is_user_logged_in() ) {
-            auth_redirect();
-        }
+        // NOTE: Removed auth_redirect() - the admin shell handles login UI itself
+        // This allows /mm/ to always load and show custom login form when not authenticated
 
         // Set response headers
         status_header( 200 );

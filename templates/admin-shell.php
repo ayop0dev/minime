@@ -152,18 +152,23 @@ $public_url = esc_attr( home_url() );
 $admin_slug = function_exists( 'minime_get_admin_slug' ) ? minime_get_admin_slug() : 'mm';
 $admin_base_path = esc_attr( $admin_slug );
 
-// Create nonce for REST API security
-$nonce = wp_create_nonce( 'wp_rest' );
+// Check if user is logged in - determines nonce availability
+$is_logged_in = is_user_logged_in();
+
+// Create nonce for REST API security ONLY if logged in
+// If not logged in, set to null so frontend shows login form
+$nonce = $is_logged_in ? wp_create_nonce( 'wp_rest' ) : null;
 
 // Build admin config object
 $admin_config = array(
     'restRoot'      => $rest_root,
     'nonce'         => $nonce,
+    'isLoggedIn'    => $is_logged_in,
     'siteId'        => $site_id,
     'publicUrl'     => $public_url,
     'adminBasePath' => $admin_base_path,
     'assetBase'     => $plugin_base_url,  // For runtime URL rewriting
-    'logoutUrl'     => wp_logout_url( home_url( '/' . $admin_slug . '/' ) ),
+    'logoutUrl'     => home_url( '/' . $admin_slug . '/' ),  // Redirect back to /mm/ after logout
 );
 
 // Generate the config script that will be injected
