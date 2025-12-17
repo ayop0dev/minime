@@ -417,50 +417,69 @@ class Minime_Templates {
      * - CSP via meta tag in srcdoc
      * - External scripts/stylesheets already stripped on save
      *
-     * @param string $code The user's HTML/CSS/JS code.
+     * @param string $code The user's HTML/CSS code (JS is stripped).
      * @return string The iframe HTML or empty string.
      */
     private static function render_sandbox_iframe( $code ) {
+        // Step 1: Trim and check for empty
+        $code = trim( $code );
         if ( empty( $code ) ) {
             return '';
         }
 
-        // Detect if user input is raw CSS (no HTML tags)
-        // If no <html, <body, <style, <script, <div tags are found, treat as raw CSS
-        $has_html_tags = preg_match( '/<(html|body|style|script|div|span|canvas|svg|head|meta)\b/i', $code );
-        if ( ! $has_html_tags ) {
-            // Wrap raw CSS in <style> tags
-            $code = '<style>' . $code . '</style>';
-        }
-
         // Defense-in-depth: strip dangerous elements before building srcdoc
-        // Strip external scripts: <script src="...">...</script> (keep inline scripts)
-        $code = preg_replace( '#<script\b(?=[^>]*\ssrc\s*=)[^>]*>.*?</script>#is', '', $code );
-        $code = preg_replace( '#<script\b(?=[^>]*\ssrc\s*=)[^>]*/>#is', '', $code );
+        // Strip ALL script tags (no JS allowed)
+        $code = preg_replace( '#<script\b[^>]*>.*?</script>#is', '', $code );
+        $code = preg_replace( '#<script\b[^>]*/>#is', '', $code );
         // Strip external stylesheets: <link rel="stylesheet" ...>
         $code = preg_replace( '#<link\b[^>]*\srel\s*=\s*["\']?stylesheet["\']?[^>]*/?>#is', '', $code );
         // Strip <base> tags (can hijack relative URLs)
         $code = preg_replace( '#<base\b[^>]*/?>#is', '', $code );
+        // Strip on* event handlers from HTML elements
+        $code = preg_replace( '#\son\w+\s*=\s*["\'][^"\']*["\']#is', '', $code );
+        $code = preg_replace( "#\\son\\w+\\s*=\\s*[^\\s>]+#is", '', $code );
 
-        // Build a full HTML document if user code doesn't have <html>
-        $has_html_tag = stripos( $code, '<html' ) !== false;
-        
-        if ( $has_html_tag ) {
-            // User provided full document, inject CSP into <head>
-            $csp_meta = '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; style-src \'unsafe-inline\'; script-src \'unsafe-inline\'; img-src https: data:; font-src https: data:;">';
-            
-            // Try to inject after <head> tag
-            if ( preg_match( '#(<head[^>]*>)#i', $code, $matches ) ) {
-                $code = str_replace( $matches[1], $matches[1] . "\n" . $csp_meta, $code );
+        // CSP meta tag for security - no script-src allowed
+        $csp_meta = '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; style-src \'unsafe-inline\'; script-src \'none\'; img-src https: data:; font-src https: data:;">';
+
+        // Step 2: Extract <style> blocks from code
+        $extracted_styles = '';
+        if ( preg_match_all( '#<style\b[^>]*>(.*?)</style>#is', $code, $style_matches, PREG_SET_ORDER ) ) {
+            foreach ( $style_matches as $match ) {
+                $extracted_styles .= '<style>' . $match[1] . '</style>' . "\n";
             }
-            $srcdoc_content = $code;
+            // Remove style blocks from original code
+            $code = preg_replace( '#<style\b[^>]*>.*?</style>#is', '', $code );
+        }
+
+        // Step 3: Detect snippet type for remaining code (CSS or HTML only, no JS)
+        $code = trim( $code );
+        $has_html_tags = strpos( $code, '<' ) !== false;
+        $is_css_only = false;
+
+        if ( ! $has_html_tags && ! empty( $code ) ) {
+            // CSS-only heuristic: contains { and : (typical CSS syntax)
+            $is_css_only = ( strpos( $code, '{' ) !== false && strpos( $code, ':' ) !== false );
+        }
+
+        // Build head and body content (no scripts)
+        $head_content = $extracted_styles;
+        $body_html = '';
+
+        if ( $is_css_only ) {
+            // Wrap raw CSS in <style> tag in head
+            $head_content .= '<style>' . "\n" . $code . "\n" . '</style>';
         } else {
-            // Wrap snippet in a full HTML document with CSP
-            $srcdoc_content = '<!DOCTYPE html>
+            // HTML snippet goes in body
+            $body_html = $code;
+        }
+
+        // Build full HTML document (no scripts)
+        $srcdoc_content = '<!DOCTYPE html>
 <html>
 <head>
 <meta charset="UTF-8">
-<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; style-src \'unsafe-inline\'; script-src \'unsafe-inline\'; img-src https: data:; font-src https: data:;">
+' . $csp_meta . '
 <style>
 html, body {
     margin: 0;
@@ -470,17 +489,17 @@ html, body {
     overflow: hidden;
 }
 </style>
+' . $head_content . '
 </head>
 <body>
-' . $code . '
+' . $body_html . '
 </body>
 </html>';
-        }
 
-        // Escape for srcdoc attribute (double-encode quotes)
-        $srcdoc_escaped = htmlspecialchars( $srcdoc_content, ENT_QUOTES, 'UTF-8' );
+        // Use base64 data URI to avoid escaping issues with srcdoc
+        $base64_content = base64_encode( $srcdoc_content );
 
-        return '<iframe class="minime-sandbox-bg" srcdoc="' . $srcdoc_escaped . '" sandbox="allow-scripts" referrerpolicy="no-referrer" loading="lazy"></iframe>';
+        return '<iframe class="minime-sandbox-bg" src="data:text/html;base64,' . $base64_content . '" sandbox="" referrerpolicy="no-referrer"></iframe>';
     }
     
     /**

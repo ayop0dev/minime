@@ -741,7 +741,7 @@ export default function SettingsPanel() {
                       </button>
                     </div>
                   ))
-                }
+                )}
               </div>
 
               <button className={settingsStyles.addButton} onClick={addButton}>
@@ -930,8 +930,8 @@ export default function SettingsPanel() {
                 {pageBackground.type === 'sandbox' && (
                   <div className={settingsStyles.formGroup}>
                     <p className={settingsStyles.helperText}>
-                      Paste CSS or HTML/CSS/JS code for a custom background. Raw CSS is auto-wrapped.
-                      External scripts and stylesheets are stripped for security. Max 100KB.
+                      Paste CSS or HTML/CSS code for a custom background. Raw CSS is auto-wrapped.
+                      JavaScript is not supported. Max 100KB.
                     </p>
                     <textarea
                       className={settingsStyles.textarea}
