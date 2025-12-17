@@ -146,14 +146,23 @@ export default function SettingsPanel() {
       }
       // Page background
       if (data.background) {
+        // Normalize gradient: API returns { colors: [], angle } but UI expects { color1, color2, angle }
+        const apiGradient = data.background.gradient;
+        const normalizedGradient = apiGradient ? {
+          color1: apiGradient.colors?.[0] || '#ffffff',
+          color2: apiGradient.colors?.[1] || '#f5f5f5',
+          angle: apiGradient.angle || 135,
+        } : { color1: '#ffffff', color2: '#f5f5f5', angle: 135 };
+
         setPageBackground({
           type: data.background.type || 'solid',
           solidColor: data.background.color || '#f5f5f5',
-          gradient: data.background.gradient || { color1: '#ffffff', color2: '#f5f5f5', angle: 135 },
+          gradient: normalizedGradient,
           image: { previewUrl: data.background.image_url || undefined },
         });
       }
-      setFooterText(data.footer_text || '');
+      // Backward-compatible: prefer branding_footer_text, fall back to footer_text
+      setFooterText(data.branding_footer_text || data.footer_text || '');
       setShowFooterBranding(data.show_footer_branding !== false);
     } catch (err) {
       console.error('Failed to load settings:', err);
