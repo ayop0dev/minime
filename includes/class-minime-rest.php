@@ -713,7 +713,20 @@ class Minime_REST {
             }
 
             if ( isset( $bg_input['image_id'] ) ) {
-                $bg['image_id'] = (int) $bg_input['image_id'];
+                $image_id = (int) $bg_input['image_id'];
+                // Validate attachment exists and is actually an attachment
+                if ( $image_id > 0 ) {
+                    $attachment = get_post( $image_id );
+                    if ( $attachment && 'attachment' === get_post_type( $attachment ) ) {
+                        $bg['image_id'] = $image_id;
+                    } else {
+                        // Invalid attachment ID, clear it
+                        $bg['image_id'] = 0;
+                    }
+                } else {
+                    // Explicitly set to 0 if cleared
+                    $bg['image_id'] = 0;
+                }
             }
 
             if ( isset( $bg_input['color'] ) ) {

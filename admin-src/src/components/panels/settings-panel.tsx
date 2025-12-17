@@ -43,6 +43,7 @@ export default function SettingsPanel() {
   // Loading and error states
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
+  const [isUploadingBgImage, setIsUploadingBgImage] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
@@ -289,6 +290,13 @@ export default function SettingsPanel() {
     const file = e.target.files?.[0];
     if (!file) return;
 
+    // Max file size check (5MB)
+    const maxSize = 5 * 1024 * 1024; // 5MB in bytes
+    if (file.size > maxSize) {
+      setError('Image file size must be less than 5MB');
+      return;
+    }
+
     // Show preview immediately
     const reader = new FileReader();
     reader.onloadend = () => {
@@ -304,6 +312,8 @@ export default function SettingsPanel() {
     reader.readAsDataURL(file);
 
     // Upload to server
+    setIsUploadingBgImage(true);
+    setError(null);
     try {
       const config = (window as any).MINIME_ADMIN_CONFIG;
       if (!config?.nonce) {
@@ -312,6 +322,7 @@ export default function SettingsPanel() {
 
       const formData = new FormData();
       formData.append('file', file);
+      formData.append('context', 'background');
 
       const restRoot = config.restRoot || '/wp-json/';
       const response = await fetch(restRoot + 'minime/v1/upload-image', {
@@ -340,6 +351,16 @@ export default function SettingsPanel() {
     } catch (err) {
       console.error('Failed to upload background image:', err);
       setError(err instanceof Error ? err.message : 'Failed to upload background image');
+      // Clear preview on error
+      setPageBackground((prev) => ({
+        ...prev,
+        image: {
+          previewUrl: undefined,
+          imageId: undefined,
+        },
+      }));
+    } finally {
+      setIsUploadingBgImage(false);
     }
   };
 
@@ -348,6 +369,7 @@ export default function SettingsPanel() {
       ...pageBackground,
       image: {
         previewUrl: undefined,
+        imageId: undefined,
       },
     });
   };
@@ -427,16 +449,16 @@ export default function SettingsPanel() {
         card_background: {
           color: cardBackground,
         },
-        // Page background
+        // Page background - only send relevant fields based on type
         background: {
           type: pageBackground.type,
-          color: pageBackground.solidColor,
-          gradient: pageBackground.gradient ? {
+          color: pageBackground.type === 'solid' ? pageBackground.solidColor : undefined,
+          gradient: pageBackground.type === 'gradient' && pageBackground.gradient ? {
             colors: [pageBackground.gradient.color1, pageBackground.gradient.color2],
             angle: pageBackground.gradient.angle || 135,
           } : undefined,
-          image_id: pageBackground.image?.imageId || 0,
-          sandbox: pageBackground.sandbox?.code ? {
+          image_id: pageBackground.type === 'image' ? (pageBackground.image?.imageId || 0) : undefined,
+          sandbox: pageBackground.type === 'sandbox' && pageBackground.sandbox?.code ? {
             code: b64Encode(pageBackground.sandbox.code),
           } : undefined,
         },
@@ -719,7 +741,7 @@ export default function SettingsPanel() {
                       </button>
                     </div>
                   ))
-                )}
+                }
               </div>
 
               <button className={settingsStyles.addButton} onClick={addButton}>
@@ -863,7 +885,11 @@ export default function SettingsPanel() {
                 {/* Image Mode */}
                 {pageBackground.type === 'image' && (
                   <div className={settingsStyles.imageModeContainer}>
-                    {!pageBackground.image?.previewUrl ? (
+                    {isUploadingBgImage ? (
+                      <div className={settingsStyles.imageUploadWrapper}>
+                        <p style={{ color: '#666', fontSize: '14px' }}>Uploading image...</p>
+                      </div>
+                    ) : !pageBackground.image?.previewUrl ? (
                       <div className={settingsStyles.imageUploadWrapper}>
                         <label
                           htmlFor="pageImageInput"
