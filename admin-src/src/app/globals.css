@@ -51,6 +51,13 @@ a {
   text-decoration: none;
 }
 
+/* Preserve user-entered text casing in form fields */
+input,
+textarea,
+select {
+  text-transform: none;
+}
+
 /* Lowercase by default on admin UI */
 .no-lowercase {
   text-transform: none;

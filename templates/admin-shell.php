@@ -163,6 +163,7 @@ $admin_config = array(
     'publicUrl'     => $public_url,
     'adminBasePath' => $admin_base_path,
     'assetBase'     => $plugin_base_url,  // For runtime URL rewriting
+    'logoutUrl'     => wp_logout_url( home_url( '/' . $admin_slug . '/' ) ),
 );
 
 // Generate the config script that will be injected

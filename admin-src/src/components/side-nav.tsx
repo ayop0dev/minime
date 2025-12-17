@@ -44,6 +44,18 @@ export default function SideNav({ activeTab, onTabChange }: SideNavProps) {
       </div>
 
       <div className={styles.navFooter}>
+        <button
+          className={styles.logoutButton}
+          onClick={() => {
+            const config = (window as any).MINIME_ADMIN_CONFIG;
+            if (config?.logoutUrl) {
+              window.location.href = config.logoutUrl;
+            }
+          }}
+        >
+          <span className={styles.icon}>🚪</span>
+          <span className={styles.label}>logout</span>
+        </button>
         <div className={styles.footerItem}>
           <span className={styles.badge}>v1.0</span>
         </div>

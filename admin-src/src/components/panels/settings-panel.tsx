@@ -5,6 +5,10 @@ import styles from './panel.module.css';
 import settingsStyles from './settings-panel.module.css';
 import { isHexColorDark } from '@/lib/color';
 
+// UTF-8 safe Base64 helpers (handles Unicode/Arabic characters)
+const b64Encode = (str: string): string => btoa(unescape(encodeURIComponent(str)));
+const b64Decode = (b64: string): string => decodeURIComponent(escape(atob(b64)));
+
 interface SocialLink {
   id: string;
   channel: 'youtube' | 'instagram' | 'facebook' | 'twitter' | 'tiktok' | 'linkedin' | 'github' | 'email' | 'phone' | 'whatsapp' | 'telegram' | 'snapchat' | 'website';
@@ -18,7 +22,7 @@ interface Button {
 }
 
 interface PageBackgroundState {
-  type: 'solid' | 'gradient' | 'image';
+  type: 'solid' | 'gradient' | 'image' | 'sandbox';
   solidColor?: string;
   gradient?: {
     color1: string;
@@ -28,6 +32,10 @@ interface PageBackgroundState {
   image?: {
     file?: File;
     previewUrl?: string;
+    imageId?: number;
+  };
+  sandbox?: {
+    code: string;
   };
 }
 
@@ -43,6 +51,7 @@ export default function SettingsPanel() {
   const [tagline, setTagline] = useState('');
   const [bio, setBio] = useState('');
   const [avatarPreview, setAvatarPreview] = useState<string | null>(null);
+  const [siteIconId, setSiteIconId] = useState<number>(0);
 
   // Social Links
   const [socialLinks, setSocialLinks] = useState<SocialLink[]>([]);
@@ -63,7 +72,13 @@ export default function SettingsPanel() {
     image: {
       previewUrl: undefined,
     },
+    sandbox: {
+      code: '',
+    },
   });
+
+  // Custom CSS
+  const [customCss, setCustomCss] = useState('');
 
   // Footer
   const [showFooterBranding, setShowFooterBranding] = useState(true);
@@ -122,6 +137,9 @@ export default function SettingsPanel() {
       if (data.site_icon_url) {
         setAvatarPreview(data.site_icon_url);
       }
+      if (data.site_icon_id) {
+        setSiteIconId(data.site_icon_id);
+      }
       // Map socials from API format to form format
       if (data.socials && Array.isArray(data.socials)) {
         const mappedSocials = data.socials.map((s: any, idx: number) => ({
@@ -154,12 +172,35 @@ export default function SettingsPanel() {
           angle: apiGradient.angle || 135,
         } : { color1: '#ffffff', color2: '#f5f5f5', angle: 135 };
 
+        // Decode sandbox code from Base64 (UTF-8 safe)
+        let sandboxCode = '';
+        if (data.background.sandbox?.code) {
+          try {
+            sandboxCode = b64Decode(data.background.sandbox.code);
+          } catch (e) {
+            console.warn('Failed to decode sandbox code:', e);
+          }
+        }
+
         setPageBackground({
           type: data.background.type || 'solid',
           solidColor: data.background.color || '#f5f5f5',
           gradient: normalizedGradient,
-          image: { previewUrl: data.background.image_url || undefined },
+          image: {
+            previewUrl: data.background.image_url || undefined,
+            imageId: data.background.image_id || 0,
+          },
+          sandbox: { code: sandboxCode },
         });
+
+        // Decode custom_css from Base64 (UTF-8 safe)
+        if (data.background.custom_css) {
+          try {
+            setCustomCss(b64Decode(data.background.custom_css));
+          } catch (e) {
+            console.warn('Failed to decode custom_css:', e);
+          }
+        }
       }
       // Backward-compatible: prefer branding_footer_text, fall back to footer_text
       setFooterText(data.branding_footer_text || data.footer_text || '');
@@ -173,20 +214,66 @@ export default function SettingsPanel() {
   };
 
   // Avatar Upload Handler
-  const handleAvatarUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleAvatarUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (file) {
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        setAvatarPreview(reader.result as string);
-      };
-      reader.readAsDataURL(file);
+    if (!file) return;
+
+    // Show preview immediately
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      setAvatarPreview(reader.result as string);
+    };
+    reader.readAsDataURL(file);
+
+    // Upload to server
+    try {
+      const config = (window as any).MINIME_ADMIN_CONFIG;
+      if (!config?.nonce) {
+        throw new Error('Admin config not found.');
+      }
+
+      const formData = new FormData();
+      formData.append('file', file);
+
+      const restRoot = config.restRoot || '/wp-json/';
+      const response = await fetch(restRoot + 'minime/v1/upload-image', {
+        method: 'POST',
+        headers: {
+          'X-WP-Nonce': config.nonce,
+        },
+        credentials: 'include',
+        body: formData,
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.message || `HTTP ${response.status}`);
+      }
+
+      const data = await response.json();
+      setSiteIconId(data.id);
+      setAvatarPreview(data.url);
+    } catch (err) {
+      console.error('Failed to upload avatar:', err);
+      setError(err instanceof Error ? err.message : 'Failed to upload avatar');
     }
   };
 
   // Page Background Handlers
-  const handlePageBackgroundTypeChange = (newType: 'solid' | 'gradient' | 'image') => {
+  const handlePageBackgroundTypeChange = (newType: 'solid' | 'gradient' | 'image' | 'sandbox') => {
     setPageBackground({ ...pageBackground, type: newType });
+  };
+
+  const handleSandboxCodeChange = (code: string) => {
+    // Limit to 100KB
+    if (code.length > 102400) {
+      setError('Sandbox code exceeds 100KB limit');
+      return;
+    }
+    setPageBackground({
+      ...pageBackground,
+      sandbox: { code },
+    });
   };
 
   const handlePageBackgroundSolidChange = (color: string) => {
@@ -210,21 +297,61 @@ export default function SettingsPanel() {
     });
   };
 
-  const handlePageBackgroundImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handlePageBackgroundImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (file) {
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        setPageBackground({
-          ...pageBackground,
-          type: 'image',
-          image: {
-            file,
-            previewUrl: reader.result as string,
-          },
-        });
-      };
-      reader.readAsDataURL(file);
+    if (!file) return;
+
+    // Show preview immediately
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      setPageBackground((prev) => ({
+        ...prev,
+        type: 'image',
+        image: {
+          ...prev.image,
+          previewUrl: reader.result as string,
+        },
+      }));
+    };
+    reader.readAsDataURL(file);
+
+    // Upload to server
+    try {
+      const config = (window as any).MINIME_ADMIN_CONFIG;
+      if (!config?.nonce) {
+        throw new Error('Admin config not found.');
+      }
+
+      const formData = new FormData();
+      formData.append('file', file);
+
+      const restRoot = config.restRoot || '/wp-json/';
+      const response = await fetch(restRoot + 'minime/v1/upload-image', {
+        method: 'POST',
+        headers: {
+          'X-WP-Nonce': config.nonce,
+        },
+        credentials: 'include',
+        body: formData,
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.message || `HTTP ${response.status}`);
+      }
+
+      const data = await response.json();
+      setPageBackground((prev) => ({
+        ...prev,
+        type: 'image',
+        image: {
+          previewUrl: data.url,
+          imageId: data.id,
+        },
+      }));
+    } catch (err) {
+      console.error('Failed to upload background image:', err);
+      setError(err instanceof Error ? err.message : 'Failed to upload background image');
     }
   };
 
@@ -297,6 +424,7 @@ export default function SettingsPanel() {
         site_title: siteTitle,
         site_tagline: tagline,
         bio: bio,
+        site_icon_id: siteIconId || undefined,
         // Map socialLinks to API format
         socials: socialLinks.map((s) => ({
           type: s.channel,
@@ -319,7 +447,11 @@ export default function SettingsPanel() {
             colors: [pageBackground.gradient.color1, pageBackground.gradient.color2],
             angle: pageBackground.gradient.angle || 135,
           } : undefined,
-          image_id: 0, // TODO: handle image upload
+          image_id: pageBackground.image?.imageId || 0,
+          sandbox: pageBackground.sandbox?.code ? {
+            code: b64Encode(pageBackground.sandbox.code),
+          } : undefined,
+          custom_css: customCss ? b64Encode(customCss) : undefined,
         },
         branding_footer_text: footerText,
       };
@@ -635,34 +767,6 @@ export default function SettingsPanel() {
                     {cardBackground}
                   </span>
                 </div>
-
-                {/* Card Preview with Automatic Contrast */}
-                <div className={settingsStyles.cardPreviewLabel}>
-                  <span>preview</span>
-                </div>
-                <div
-                  className={settingsStyles.cardPreview}
-                  style={{ backgroundColor: cardBackground }}
-                  data-theme={isHexColorDark(cardBackground) ? 'dark' : 'light'}
-                >
-                  <div className={settingsStyles.previewContent}>
-                    <h4 className={settingsStyles.previewTitle}>your card</h4>
-                    <p className={settingsStyles.previewText}>
-                      This is how your card will look
-                    </p>
-                    <div className={settingsStyles.previewControls}>
-                      <button className={settingsStyles.previewButton}>
-                        primary
-                      </button>
-                      <input
-                        type="text"
-                        className={settingsStyles.previewInput}
-                        placeholder="input field"
-                        readOnly
-                      />
-                    </div>
-                  </div>
-                </div>
               </div>
             </div>
 
@@ -675,7 +779,7 @@ export default function SettingsPanel() {
 
                 {/* Segmented Control */}
                 <div className={settingsStyles.segmentedControl}>
-                  {(['solid', 'gradient', 'image'] as const).map((type) => (
+                  {(['solid', 'gradient', 'image', 'sandbox'] as const).map((type) => (
                     <button
                       key={type}
                       className={`${settingsStyles.segmentButton} ${
@@ -808,6 +912,43 @@ export default function SettingsPanel() {
                     )}
                   </div>
                 )}
+
+                {/* Sandbox Mode */}
+                {pageBackground.type === 'sandbox' && (
+                  <div className={settingsStyles.formGroup}>
+                    <p className={settingsStyles.helperText}>
+                      Paste HTML/CSS/JS code for a custom background. Rendered in a sandboxed iframe.
+                      External scripts and stylesheets are stripped for security. Max 100KB.
+                    </p>
+                    <textarea
+                      className={settingsStyles.textarea}
+                      placeholder="<style>body { background: linear-gradient(45deg, #ff6b6b, #4ecdc4); }</style>"
+                      value={pageBackground.sandbox?.code || ''}
+                      onChange={(e) => handleSandboxCodeChange(e.target.value)}
+                      rows={10}
+                      style={{ fontFamily: 'monospace', fontSize: '12px' }}
+                    />
+                    <p className={settingsStyles.helperText} style={{ marginTop: '8px' }}>
+                      {((pageBackground.sandbox?.code?.length || 0) / 1024).toFixed(1)}KB / 100KB
+                    </p>
+                  </div>
+                )}
+
+                {/* Custom CSS (always visible, applies to all background types) */}
+                <div className={settingsStyles.formGroup} style={{ marginTop: '16px' }}>
+                  <label className={settingsStyles.inputLabel}>custom css</label>
+                  <p className={settingsStyles.helperText}>
+                    Add custom CSS to style your public page. CSS only—no HTML tags allowed.
+                  </p>
+                  <textarea
+                    className={settingsStyles.textarea}
+                    placeholder=".minime-card { border-radius: 32px; }\n.minime-button { font-weight: 700; }"
+                    value={customCss}
+                    onChange={(e) => setCustomCss(e.target.value)}
+                    rows={6}
+                    style={{ fontFamily: 'monospace', fontSize: '12px' }}
+                  />
+                </div>
               </div>
             </div>
           </div>

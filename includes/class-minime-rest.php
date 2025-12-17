@@ -398,6 +398,16 @@ class Minime_REST {
         // Admin slug for dashboard context
         $admin_slug = minime_get_admin_slug();
 
+        // Sandbox code: limit to 100KB before encoding
+        $raw_sandbox = isset( $bg['sandbox']['code'] ) ? (string) $bg['sandbox']['code'] : '';
+        if ( strlen( $raw_sandbox ) > 102400 ) {
+            $raw_sandbox = substr( $raw_sandbox, 0, 102400 );
+        }
+
+        // Custom CSS: sanitize and encode for transport
+        $raw_custom_css = isset( $bg['custom_css'] ) ? (string) $bg['custom_css'] : '';
+        $custom_css_b64 = $raw_custom_css !== '' ? base64_encode( $raw_custom_css ) : '';
+
         return rest_ensure_response( array(
             // Identity
             'site_title'   => $site_title,
@@ -419,6 +429,10 @@ class Minime_REST {
                     'angle'  => isset( $bg_gradient['angle'] ) ? (int) $bg_gradient['angle'] : 180,
                 ),
                 'custom_code' => $bg_custom,
+                'sandbox'     => array(
+                    'code' => $raw_sandbox !== '' ? base64_encode( $raw_sandbox ) : '',
+                ),
+                'custom_css'  => $custom_css_b64,
             ),
 
             // Card Background - COLOR ONLY (solid only for cards)
@@ -744,6 +758,61 @@ class Minime_REST {
                 } else {
                     // Base64 decode failed, store empty string
                     $bg['custom_code'] = '';
+                }
+            }
+
+            // --- Sandbox Code (HTML/CSS/JS for sandboxed iframe) ---
+            if ( isset( $bg_input['sandbox'] ) && is_array( $bg_input['sandbox'] ) && isset( $bg_input['sandbox']['code'] ) ) {
+                $encoded = (string) $bg_input['sandbox']['code'];
+                $decoded = base64_decode( $encoded, true );
+
+                if ( $decoded !== false ) {
+                    // Limit to 100KB decoded
+                    if ( strlen( $decoded ) > 102400 ) {
+                        $decoded = substr( $decoded, 0, 102400 );
+                    }
+
+                    // Remove PHP tags
+                    $decoded = str_replace( array('<?php', '<?', '?>'), '', $decoded );
+
+                    // Strip external scripts: <script src="...">...</script> but keep inline <script>...</script>
+                    // Pattern 1: <script ... src="...">any content</script>
+                    $decoded = preg_replace( '#<script\b(?=[^>]*\ssrc\s*=)[^>]*>.*?</script>#is', '', $decoded );
+                    // Pattern 2: self-closing <script ... src="..." />
+                    $decoded = preg_replace( '#<script\b(?=[^>]*\ssrc\s*=)[^>]*/>#is', '', $decoded );
+
+                    // Strip external stylesheets: <link rel="stylesheet" href="...">
+                    $decoded = preg_replace( '#<link\b[^>]*\srel\s*=\s*["\']?stylesheet["\']?[^>]*/?>#is', '', $decoded );
+
+                    // Strip <base> tags (can redirect relative URLs)
+                    $decoded = preg_replace( '#<base\b[^>]*/?>#is', '', $decoded );
+
+                    if ( ! isset( $bg['sandbox'] ) ) {
+                        $bg['sandbox'] = array();
+                    }
+                    $bg['sandbox']['code'] = $decoded;
+                } else {
+                    $bg['sandbox']['code'] = '';
+                }
+            }
+
+            // --- Custom CSS (CSS only, no HTML) ---
+            if ( isset( $bg_input['custom_css'] ) ) {
+                $encoded = (string) $bg_input['custom_css'];
+                $decoded = base64_decode( $encoded, true );
+
+                if ( $decoded !== false ) {
+                    // Strip < and > to prevent any HTML/script injection
+                    $decoded = str_replace( array( '<', '>' ), '', $decoded );
+
+                    // Block dangerous CSS patterns: @import, expression(), javascript:
+                    $decoded = preg_replace( '/@import\b/i', '', $decoded );
+                    $decoded = preg_replace( '/expression\s*\(/i', '', $decoded );
+                    $decoded = preg_replace( '/javascript\s*:/i', '', $decoded );
+
+                    $bg['custom_css'] = $decoded;
+                } else {
+                    $bg['custom_css'] = '';
                 }
             }
         }

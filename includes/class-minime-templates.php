@@ -156,14 +156,22 @@ class Minime_Templates {
         $bg_image_id = isset( $bg['image_id'] ) ? (int) $bg['image_id'] : 0;
         $bg_image_url = $bg_image_id ? wp_get_attachment_url( $bg_image_id ) : '';
         $bg_gradient = isset( $bg['gradient'] ) ? $bg['gradient'] : array();
+        $bg_sandbox_code = isset( $bg['sandbox']['code'] ) ? $bg['sandbox']['code'] : '';
+        $bg_custom_css = isset( $bg['custom_css'] ) ? $bg['custom_css'] : '';
         
         // Card background
         $card_bg = isset( $settings['card_background'] ) ? $settings['card_background'] : array();
         $card_color = isset( $card_bg['color'] ) ? $card_bg['color'] : '#ffffff';
         
-        // Build background CSS
+        // Build background CSS (not used for sandbox type)
         $page_bg_css = '';
-        if ( $bg_type === 'gradient' && ! empty( $bg_gradient['colors'] ) ) {
+        $sandbox_iframe_html = '';
+        
+        if ( $bg_type === 'sandbox' && ! empty( $bg_sandbox_code ) ) {
+            // For sandbox, we use a transparent background and render iframe separately
+            $page_bg_css = 'background: transparent;';
+            $sandbox_iframe_html = self::render_sandbox_iframe( $bg_sandbox_code );
+        } elseif ( $bg_type === 'gradient' && ! empty( $bg_gradient['colors'] ) ) {
             $colors = implode( ', ', $bg_gradient['colors'] );
             $angle = isset( $bg_gradient['angle'] ) ? (int) $bg_gradient['angle'] : 180;
             $page_bg_css = "background: linear-gradient({$angle}deg, {$colors});";
@@ -192,24 +200,48 @@ class Minime_Templates {
         );
         
         ob_start();
+        
+        // Get plugin URL for font assets
+        $plugin_url = plugin_dir_url( dirname( __FILE__ ) );
+        $fonts_url = $plugin_url . 'assets/admin-app/fonts/';
         ?>
         <style>
+            /* Changa font family */
+            @font-face {
+                font-family: 'Changa';
+                src: url('<?php echo esc_url( $fonts_url ); ?>changa-regular.woff2') format('woff2');
+                font-weight: 400;
+                font-style: normal;
+                font-display: swap;
+            }
+            @font-face {
+                font-family: 'Changa';
+                src: url('<?php echo esc_url( $fonts_url ); ?>changa-medium.woff2') format('woff2');
+                font-weight: 500;
+                font-style: normal;
+                font-display: swap;
+            }
+            @font-face {
+                font-family: 'Changa';
+                src: url('<?php echo esc_url( $fonts_url ); ?>changa-bold.woff2') format('woff2');
+                font-weight: 700;
+                font-style: normal;
+                font-display: swap;
+            }
             .minime-card-wrapper {
                 min-height: 100vh;
                 display: flex;
                 align-items: center;
                 justify-content: center;
                 padding: 20px;
+                font-family: 'Changa', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
                 <?php echo $page_bg_css; ?>
             }
             .minime-card {
-                background: <?php echo esc_attr( $card_color ); ?>;
-                border-radius: 24px;
-                padding: 40px 30px;
                 max-width: 400px;
                 width: 100%;
                 text-align: center;
-                box-shadow: 0 10px 40px rgba(0,0,0,0.15);
+                padding: 40px 30px;
             }
             .minime-avatar {
                 width: 100px;
@@ -279,7 +311,35 @@ class Minime_Templates {
                 transform: translateY(-2px);
                 opacity: 0.9;
             }
+            .minime-sandbox-bg {
+                position: fixed;
+                inset: 0;
+                z-index: 0;
+                pointer-events: none;
+                border: none;
+                width: 100%;
+                height: 100%;
+            }
+            .minime-card-wrapper {
+                position: relative;
+                z-index: 1;
+            }
         </style>
+        <?php
+        // Inject custom CSS (defense-in-depth sanitization)
+        if ( ! empty( $bg_custom_css ) ) :
+            // Strip < and > to prevent HTML injection
+            $safe_css = str_replace( array( '<', '>' ), '', $bg_custom_css );
+            // Block dangerous CSS patterns
+            $safe_css = preg_replace( '/@import\b/i', '', $safe_css );
+            $safe_css = preg_replace( '/expression\s*\(/i', '', $safe_css );
+            $safe_css = preg_replace( '/javascript\s*:/i', '', $safe_css );
+        ?>
+        <style id="minime-custom-css">
+<?php echo $safe_css; // phpcs:ignore WordPress.Security.EscapedOutput.OutputNotEscaped -- CSS already sanitized ?>
+        </style>
+        <?php endif; ?>
+        <?php echo $sandbox_iframe_html; // phpcs:ignore WordPress.Security.EscapedOutput.OutputNotEscaped ?>
         <div class="minime-card-wrapper">
             <div class="minime-card">
                 <?php if ( $site_icon_url ) : ?>
@@ -344,6 +404,73 @@ class Minime_Templates {
         $b = hexdec( substr( $hex, 4, 2 ) );
         $luminance = ( 0.299 * $r + 0.587 * $g + 0.114 * $b ) / 255;
         return $luminance > 0.5 ? '#000000' : '#ffffff';
+    }
+
+    /**
+     * Render a sandboxed iframe for custom HTML/CSS/JS background.
+     * 
+     * Security measures:
+     * - sandbox="allow-scripts" only (no forms, popups, same-origin, etc.)
+     * - referrerpolicy="no-referrer"
+     * - CSP via meta tag in srcdoc
+     * - External scripts/stylesheets already stripped on save
+     *
+     * @param string $code The user's HTML/CSS/JS code.
+     * @return string The iframe HTML or empty string.
+     */
+    private static function render_sandbox_iframe( $code ) {
+        if ( empty( $code ) ) {
+            return '';
+        }
+
+        // Defense-in-depth: strip dangerous elements before building srcdoc
+        // Strip external scripts: <script src="...">...</script> (keep inline scripts)
+        $code = preg_replace( '#<script\b(?=[^>]*\ssrc\s*=)[^>]*>.*?</script>#is', '', $code );
+        $code = preg_replace( '#<script\b(?=[^>]*\ssrc\s*=)[^>]*/>#is', '', $code );
+        // Strip external stylesheets: <link rel="stylesheet" ...>
+        $code = preg_replace( '#<link\b[^>]*\srel\s*=\s*["\']?stylesheet["\']?[^>]*/?>#is', '', $code );
+        // Strip <base> tags (can hijack relative URLs)
+        $code = preg_replace( '#<base\b[^>]*/?>#is', '', $code );
+
+        // Build a full HTML document if user code doesn't have <html>
+        $has_html_tag = stripos( $code, '<html' ) !== false;
+        
+        if ( $has_html_tag ) {
+            // User provided full document, inject CSP into <head>
+            $csp_meta = '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; style-src \'unsafe-inline\'; script-src \'unsafe-inline\'; img-src https: data:; font-src https: data:;">';
+            
+            // Try to inject after <head> tag
+            if ( preg_match( '#(<head[^>]*>)#i', $code, $matches ) ) {
+                $code = str_replace( $matches[1], $matches[1] . "\n" . $csp_meta, $code );
+            }
+            $srcdoc_content = $code;
+        } else {
+            // Wrap snippet in a full HTML document with CSP
+            $srcdoc_content = '<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; style-src \'unsafe-inline\'; script-src \'unsafe-inline\'; img-src https: data:; font-src https: data:;">
+<style>
+html, body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+}
+</style>
+</head>
+<body>
+' . $code . '
+</body>
+</html>';
+        }
+
+        // Escape for srcdoc attribute (double-encode quotes)
+        $srcdoc_escaped = htmlspecialchars( $srcdoc_content, ENT_QUOTES, 'UTF-8' );
+
+        return '<iframe class="minime-sandbox-bg" srcdoc="' . $srcdoc_escaped . '" sandbox="allow-scripts" referrerpolicy="no-referrer" loading="lazy"></iframe>';
     }
     
     /**

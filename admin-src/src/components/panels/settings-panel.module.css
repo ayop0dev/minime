@@ -44,7 +44,7 @@
   color: var(--text);
   font-family: inherit;
   font-size: 14px;
-  text-transform: inherit;
+  text-transform: none;
   transition: all 0.2s ease;
 }
 
@@ -67,7 +67,7 @@
   color: var(--text);
   font-family: inherit;
   font-size: 14px;
-  text-transform: inherit;
+  text-transform: none;
   resize: vertical;
   transition: all 0.2s ease;
 }
